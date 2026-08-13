@@ -1,0 +1,43 @@
+#!/bin/bash
+# ============================================================
+# kb_search — 知识图谱自动检索工具(自动感知的"第一查")
+# 用法: kb_search "查询内容" [topN] [--memory|--github|--all]
+#   查询内容:  必填
+#   topN:      可选, 返回几条(默认4)
+#   --memory:  查记忆域(memory_rag, 私有经历)
+#   --github:  只查 GitHub 项目数据集
+#   --all:     查文献+项目
+# 默认: 查知识图谱(cognee: wiki_full文献)
+# 输出: 精简 Top 结果, 便于 agent 直接读取并基于图谱作答
+# ============================================================
+cd ~/.openclaw/workspace/projects/neurograph/cognee-bridge
+export SSL_CERT_FILE=/etc/ssl/cert.pem CURL_CA_BUNDLE=/etc/ssl/cert.pem
+# TUN 模式已全局接管（2026-08-14 起），无需显式 1097 代理
+export NO_PROXY="us.i.posthog.com,api.posthog.com,127.0.0.1,localhost"
+
+Q="$1"
+TOP="${2:-4}"
+DOMAIN="knowledge"
+DATASETS="wiki_full"
+
+for a in "${@:3}"; do
+  case "$a" in
+    --memory) DOMAIN="memory" ;;
+    --github) DATASETS="github_projects" ;;
+    --all)    DATASETS="wiki_full,github_projects" ;;
+  esac
+done
+
+DSKEY=$(python3 -c "import json,os; print(json.load(open(os.path.expanduser('~/.openclaw/openclaw.json')))['env']['DASHSCOPE_API_KEY'])" 2>/dev/null)
+export DASHSCOPE_API_KEY="$DSKEY"
+
+if [[ -z "$Q" ]]; then
+  echo "用法: kb_search \"查询内容\" [topN] [--memory|--github|--all]"
+  exit 1
+fi
+
+if [[ "$DOMAIN" == "memory" ]]; then
+  ~/.cognee-venv/bin/python -u query.py "$Q" --top "$TOP" --domain memory 2>/dev/null
+else
+  ~/.cognee-venv/bin/python -u query.py "$Q" --top "$TOP" --datasets "$DATASETS" 2>/dev/null
+fi

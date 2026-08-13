@@ -1,0 +1,27 @@
+# Secrets and local environment
+.env
+.env.*
+!.env.example
+.venv/
+
+# Python caches and tooling
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Runtime databases, generated artifacts, and private source material
+data/
+outputs/
+merged_talks/
+ppt_vision/output/
+*.db
+*.sqlite
+*.sqlite3
+*.lance/
+.cognee_system/
+
+# Logs and operating-system files
+*.log
+.DS_Store
