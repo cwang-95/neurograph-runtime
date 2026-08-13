@@ -3,10 +3,13 @@
 """
 方案① 检索入口 — cognee 知识域(文献) + ZenBrain 类脑加权
 用法(日常): ~/.cognee-venv/bin/python -u query.py "自适应放疗 在线自适应" [--top 5]
+          ~/.cognee-venv/bin/python -u query.py "问题" --mode graph-evidence --format json
           ~/.cognee-venv/bin/python -u query.py "危及器官 自动勾画" --domain knowledge
           ~/.cognee-venv/bin/python -u query.py "我今天要做什么" --domain memory
 说明:
-  - 默认查知识域(文献, cognee): 专业底色
+  - graph-evidence: 返回图邻域证据，不生成答案（默认，适合 Codex/OpenClaw）
+  - answer: DeepSeek 基于图上下文生成答案（独立问答备用）
+  - evidence: 返回原始向量片段，不生成答案（精确事实与溯源）
   - --domain memory: 走 memory_rag(记忆域, 私有经历), 不串味
 """
 import os, sys, asyncio, argparse, json
@@ -31,6 +34,7 @@ DK_KEY = _get_deepseek_key()
 for k, v in {
     "LLM_PROVIDER": "openai", "LLM_MODEL": "deepseek/deepseek-v4-flash",
     "LLM_API_KEY": DK_KEY, "LLM_ENDPOINT": DS_BASE_URL,
+    "LLM_ARGS": '{"thinking": {"type": "disabled"}}',
     "EMBEDDING_PROVIDER": "openai_compatible",
     "EMBEDDING_MODEL": "mlx-community/Qwen3-Embedding-0.6B-4bit-DWQ",
     "EMBEDDING_API_KEY": "local-qwen", "EMBEDDING_ENDPOINT": "http://127.0.0.1:8000/v1",
@@ -145,6 +149,26 @@ def extract_text(x):
         pass
     return _clean_title(str(inner))[:110]
 
+def extract_content(x):
+    """保留召回片段正文，供上层模型直接基于证据回答。"""
+    inner = getattr(x, "search_result", None) or x
+    if isinstance(inner, str):
+        return inner.strip()
+    if isinstance(inner, dict):
+        for key in ("text", "content", "description", "part"):
+            value = inner.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        for value in inner.values():
+            if isinstance(value, (dict, list)):
+                content = extract_content(value)
+                if content:
+                    return content
+    if isinstance(inner, list):
+        parts = [extract_content(item) for item in inner]
+        return "\n\n".join(part for part in parts if part)
+    return str(inner).strip()
+
 def _unwrap_graph_answer(r):
     """GRAPH_COMPLETION 返回结构统一提取为纯文本答案。
     实测稳定形态: list[str] (len=1, 元素即 LLM 综合答案)。
@@ -176,22 +200,35 @@ def _unwrap_graph_answer(r):
     return "\n\n".join(answers)
 
 
-async def search_knowledge(q, top=5, datasets=None, mode="graph"):
+async def search_knowledge(q, top=5, datasets=None, mode="graph-evidence"):
     import cognee
     # 支持逗号分隔的多数据集, cognee 需要列表
     if datasets is None:
         datasets = [DATASET]
     elif isinstance(datasets, str):
         datasets = [d.strip() for d in datasets.split(",") if d.strip()]
-    if mode == "chunks":
-        # 纯向量检索(备选, 周末 ZenBrain 接回时用)
-        r = await cognee.search(query_text=q, query_type=cognee.SearchType.CHUNKS, datasets=datasets)
+    if mode == "evidence":
+        r = await cognee.search(
+            query_text=q, query_type=cognee.SearchType.CHUNKS,
+            datasets=datasets, top_k=max(top, 15),
+        )
         results = [{"id": str(getattr(x, "dataset_id", "") or ""),
-                    "title": extract_text(x),
-                    "source": extract_source(x)} for x in r[:top]]
+                    "title": extract_text(x), "source": extract_source(x),
+                    "content": extract_content(x)} for x in r[:top]]
         return results, r
-    # 默认: GRAPH 图谱增强检索(向量召回 + 图邻域扩展 + LLM 综合)
-    r = await cognee.search(query_text=q, query_type=cognee.SearchType.GRAPH_COMPLETION, datasets=datasets)
+    if mode == "graph-evidence":
+        # 与 GRAPH_COMPLETION 使用同一图检索器，但 only_context 跳过 LLM 回答。
+        r = await cognee.search(
+            query_text=q, query_type=cognee.SearchType.GRAPH_COMPLETION,
+            datasets=datasets, top_k=top, only_context=True,
+            neighborhood_depth=2, neighborhood_seed_top_k=min(top, 10),
+        )
+        return [str(item) for item in r if str(item).strip()], r
+    # answer: 图上下文 + DeepSeek 综合答案。
+    r = await cognee.search(
+        query_text=q, query_type=cognee.SearchType.GRAPH_COMPLETION,
+        datasets=datasets, top_k=top,
+    )
     answer = _unwrap_graph_answer(r)
     return answer, r
 
@@ -216,7 +253,14 @@ async def main():
     ap.add_argument("--top", type=int, default=5)
     ap.add_argument("--domain", choices=["knowledge", "memory"], default="knowledge")
     ap.add_argument("--datasets", default=None, help="逗号分隔数据集, 如 wiki_full,github_projects")
-    ap.add_argument("--chunks", action="store_true", help="用纯向量 CHUNKS 检索(备选, 不图谱增强)")
+    ap.add_argument("--mode", choices=["evidence", "graph-evidence", "answer"],
+                    default="graph-evidence", help="检索模式（默认 graph-evidence）")
+    ap.add_argument("--format", choices=["text", "json"], default="text",
+                    help="输出格式（默认 text）")
+    ap.add_argument("--evidence", action="store_true", help="等价于 --mode evidence")
+    ap.add_argument("--graph-evidence", action="store_true", help="等价于 --mode graph-evidence")
+    ap.add_argument("--answer", action="store_true", help="等价于 --mode answer")
+    ap.add_argument("--chunks", action="store_true", help="兼容旧参数，等价于 --mode evidence")
     args = ap.parse_args()
 
     if args.domain == "memory":
@@ -224,24 +268,46 @@ async def main():
         print(search_memory(args.query, args.top))
         return
 
-    mode = "chunks" if args.chunks else "graph"
-    tag = "GRAPH 图谱增强" if mode == "graph" else "CHUNKS 纯向量"
-    print(f"[知识域] cognee {tag}检索: {args.query} | datasets={args.datasets or DATASET}")
-    if mode == "graph":
-        answer, raw = await search_knowledge(args.query, args.top, args.datasets, mode="graph")
-        print(f"\n{answer}" if answer else "\n(图谱检索未召回相关内容)")
+    aliases = [args.evidence or args.chunks, args.graph_evidence, args.answer]
+    if sum(bool(value) for value in aliases) > 1:
+        ap.error("--evidence/--chunks、--graph-evidence、--answer 只能选一个")
+    mode = ("evidence" if aliases[0] else
+            "graph-evidence" if aliases[1] else
+            "answer" if aliases[2] else args.mode)
+    datasets = args.datasets or DATASET
+
+    if mode == "answer":
+        answer, raw = await search_knowledge(args.query, args.top, datasets, mode=mode)
+        if args.format == "json":
+            print(json.dumps({"mode": mode, "query": args.query, "datasets": datasets,
+                              "answer": answer}, ensure_ascii=False, indent=2))
+        else:
+            print(f"[知识域] GRAPH 图增强答案: {args.query} | datasets={datasets}")
+            print(f"\n{answer}" if answer else "\n(图谱检索未召回相关内容)")
         return
-    # chunks 分支: 类脑加权排序(周末 ZenBrain 接回后复用)
-    results, raw = await search_knowledge(args.query, args.top, args.datasets, mode="chunks")
-    boosted = boost(results) if results else []
-    print(f"\n按类脑权重排序(top {len(boosted)}):")
-    for i, r in enumerate(boosted, 1):
-        title = r.get("title", "")[:110]
-        score = r.get("_classed_score", 0)
-        retr = r.get("_retrievability_pct", 0)
-        src = r.get("source", "") or ""
-        src_tag = f"  📚 {src}" if src else ""
-        print(f"  {i}. [{score}分/可回忆{retr}%] {title}{src_tag}")
+
+    results, raw = await search_knowledge(args.query, args.top, datasets, mode=mode)
+    if mode == "evidence":
+        boosted = boost(results) if results else []
+        payload = {"mode": mode, "query": args.query, "datasets": datasets,
+                   "evidence": boosted}
+        if args.format == "json":
+            print(json.dumps(payload, ensure_ascii=False, indent=2))
+            return
+        print(f"[知识域] CHUNKS 原始证据: {args.query} | datasets={datasets}")
+        for i, item in enumerate(boosted, 1):
+            src = f"\n    来源: {item['source']}" if item.get("source") else ""
+            print(f"\n  [{i}] {item.get('title', '')}{src}\n"
+                  f"    {item.get('content', '').replace(chr(10), chr(10) + '    ')}")
+        return
+
+    payload = {"mode": mode, "query": args.query, "datasets": datasets,
+               "graph_context": results}
+    if args.format == "json":
+        print(json.dumps(payload, ensure_ascii=False, indent=2))
+        return
+    print(f"[知识域] GRAPH 图关联证据（无LLM回答）: {args.query} | datasets={datasets}")
+    print("\n\n".join(results) if results else "\n(图谱未召回关联证据)")
 
 if __name__ == "__main__":
     asyncio.run(main())

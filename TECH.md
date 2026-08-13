@@ -146,12 +146,38 @@ await cognee.cognify(datasets=args.dataset)
 
 ## 4. 检索（query.py / kb_search）
 
+### 4.0 三种调用模式
+
+```text
+evidence       = CHUNKS 原文片段，不调用回答模型
+graph-evidence = GRAPH_COMPLETION 检索器 + only_context=True，不执行LLM completion（默认）
+answer         = GRAPH_COMPLETION 完整链路，由DeepSeek生成答案（独立问答备用）
+```
+
+`graph-evidence` 使用 Cognee 1.4.2 的公开参数 `only_context=True`，默认从向量检索结果选择种子节点并扩展两跳图邻域。输出包含节点正文和 `source --[relationship]--> target` 关系，可直接交给 Codex 或 OpenClaw 的强模型。使用 `--format json` 时返回稳定的机器可读字段：
+
+```json
+{
+  "mode": "graph-evidence",
+  "query": "...",
+  "datasets": "wiki_full,github_projects",
+  "graph_context": ["Nodes: ... Connections: ..."]
+}
+```
+
+职责边界：DeepSeek仍负责 `cognify` 建图以及 `answer` 模式；证据模式不让DeepSeek生成最终答案。
+
 ### 4.1 用法
 ```bash
 # 直接 python 调用（最灵活）
 ~/.cognee-venv/bin/python -u query.py "自适应放疗" --top 5
 ~/.cognee-venv/bin/python -u query.py "多智能体 协作" --datasets wiki_full,github_projects
 ~/.cognee-venv/bin/python -u query.py "我今天要做什么" --domain memory   # 记忆域
+
+# 三种知识域接口
+~/.cognee-venv/bin/python -u query.py "问题" --mode evidence --format json
+~/.cognee-venv/bin/python -u query.py "问题" --mode graph-evidence --format json
+~/.cognee-venv/bin/python -u query.py "问题" --mode answer --format json
 
 # 封装命令（自动感知第一查, 推荐日常）
 bash ~/.openclaw/workspace/projects/neurograph/scripts/kb_search "自适应放疗" [4] [--all|--github|--memory]
@@ -164,6 +190,8 @@ bash ~/.openclaw/workspace/projects/neurograph/scripts/kb_search "自适应放�
 | `--top` | int | 5 | 返回几条 |
 | `--domain` | choice | knowledge | knowledge=cognee / memory=memory_rag |
 | `--datasets` | str | wiki_full | 逗号分隔多数据集（如 `wiki_full,github_projects`） |
+| `--mode` | choice | graph-evidence | evidence / graph-evidence / answer |
+| `--format` | choice | text | text / json |
 
 ### 4.2 cognee.search 调用（关键 API）
 ```python

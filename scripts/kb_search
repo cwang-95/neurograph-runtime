@@ -1,13 +1,13 @@
 #!/bin/bash
 # ============================================================
 # kb_search — 知识图谱自动检索工具(自动感知的"第一查")
-# 用法: kb_search "查询内容" [topN] [--memory|--github|--all]
+# 用法: kb_search "查询内容" [topN] [--answer|--graph-evidence|--evidence] [--json]
 #   查询内容:  必填
 #   topN:      可选, 返回几条(默认4)
 #   --memory:  查记忆域(memory_rag, 私有经历)
 #   --github:  只查 GitHub 项目数据集
 #   --all:     查文献+项目
-# 默认: 查知识图谱(cognee: wiki_full文献)
+# 默认: --graph-evidence（图增强证据，由 OpenClaw/Codex 上层模型回答）
 # 输出: 精简 Top 结果, 便于 agent 直接读取并基于图谱作答
 # ============================================================
 cd ~/.openclaw/workspace/projects/neurograph/cognee-bridge
@@ -16,15 +16,27 @@ export SSL_CERT_FILE=/etc/ssl/cert.pem CURL_CA_BUNDLE=/etc/ssl/cert.pem
 export NO_PROXY="us.i.posthog.com,api.posthog.com,127.0.0.1,localhost"
 
 Q="$1"
-TOP="${2:-4}"
+TOP="4"
 DOMAIN="knowledge"
 DATASETS="wiki_full"
+MODE="graph-evidence"
+FORMAT="text"
 
-for a in "${@:3}"; do
+for a in "${@:2}"; do
+  case "$a" in
+    '' ) ;;
+    *[!0-9]* ) ;;
+    * ) TOP="$a"; continue ;;
+  esac
   case "$a" in
     --memory) DOMAIN="memory" ;;
     --github) DATASETS="github_projects" ;;
     --all)    DATASETS="wiki_full,github_projects" ;;
+    --evidence|--chunks) MODE="evidence" ;;
+    --graph-evidence) MODE="graph-evidence" ;;
+    --answer) MODE="answer" ;;
+    --json) FORMAT="json" ;;
+    *) echo "未知参数: $a" >&2; exit 2 ;;
   esac
 done
 
@@ -32,12 +44,13 @@ DSKEY=$(python3 -c "import json,os; print(json.load(open(os.path.expanduser('~/.
 export DASHSCOPE_API_KEY="$DSKEY"
 
 if [[ -z "$Q" ]]; then
-  echo "用法: kb_search \"查询内容\" [topN] [--memory|--github|--all]"
+  echo "用法: kb_search \"查询内容\" [topN] [--answer|--graph-evidence|--evidence] [--json]"
   exit 1
 fi
 
 if [[ "$DOMAIN" == "memory" ]]; then
   ~/.cognee-venv/bin/python -u query.py "$Q" --top "$TOP" --domain memory 2>/dev/null
 else
-  ~/.cognee-venv/bin/python -u query.py "$Q" --top "$TOP" --datasets "$DATASETS" 2>/dev/null
+  ~/.cognee-venv/bin/python -u query.py "$Q" --top "$TOP" --datasets "$DATASETS" \
+    --mode "$MODE" --format "$FORMAT" 2>/dev/null
 fi

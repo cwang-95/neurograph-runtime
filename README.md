@@ -127,3 +127,28 @@
 - 标题清洗已生效(不再显示 `---` frontmatter)
 
 > 下一步②按阶段推进(见四); ②成熟后①退居备用, 参照本文档"周日升级版注意事项"避开已踩的坑。
+
+---
+
+## 八、检索接口分层
+
+同一个 NeuroGraph 后端提供三种稳定模式，上层按自身推理能力选择，避免重复生成答案：
+
+| 模式 | 做什么 | 是否调用回答模型 | 推荐调用方 |
+|---|---|---:|---|
+| `evidence` | 返回语义相关的完整原文片段 | 否 | 精确事实、来源回查 |
+| `graph-evidence` | 向量召回种子后扩展两跳图邻域，返回节点和关系 | 否 | Codex、OpenClaw + DeepSeek（默认） |
+| `answer` | 基于图上下文生成完整答案 | 是，DeepSeek | 无上层模型的独立问答备用 |
+
+```bash
+# OpenClaw/Codex默认：只返回图增强证据，由上层模型回答
+bash scripts/kb_search "自适应放疗" 8 --all --graph-evidence --json
+
+# Codex/强模型：只取图关联证据，由上层模型回答
+bash scripts/kb_search "自适应放疗" 8 --all --graph-evidence --json
+
+# 精确查数字或原文
+bash scripts/kb_search "gamma 98.6%" 8 --evidence --json
+```
+
+不传模式时默认 `graph-evidence`，避免 OpenClaw 中的 DeepSeek 与 NeuroGraph 内部 DeepSeek 重复生成答案。`answer` 保留为独立问答备用；旧参数 `--chunks` 继续兼容，等价于 `--evidence`。
