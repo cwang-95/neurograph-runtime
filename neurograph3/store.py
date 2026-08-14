@@ -319,21 +319,48 @@ class Graph3Store:
                     ),
                 )
             for relation in relations:
+                existing = self.connection.execute(
+                    "SELECT observation_ids_json, confidence FROM relations WHERE relation_id = ?",
+                    (relation.relation_id,),
+                ).fetchone()
+                if existing is None:
+                    self.connection.execute(
+                        """
+                        INSERT INTO relations(
+                            relation_id, source_entity_id, target_entity_id, predicate,
+                            observation_ids_json, confidence, payload_json
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            relation.relation_id,
+                            relation.source_entity_id,
+                            relation.target_entity_id,
+                            relation.predicate,
+                            json.dumps(relation.observation_ids, ensure_ascii=False),
+                            relation.confidence,
+                            json.dumps(relation.model_dump(mode="json"), ensure_ascii=False, sort_keys=True),
+                        ),
+                    )
+                    continue
+
+                observation_ids = tuple(
+                    sorted(set(json.loads(existing["observation_ids_json"])) | set(relation.observation_ids))
+                )
+                confidence = max(float(existing["confidence"]), relation.confidence)
+                payload = relation.model_dump(mode="json")
+                payload["observation_ids"] = list(observation_ids)
+                payload["confidence"] = confidence
                 self.connection.execute(
                     """
-                    INSERT OR IGNORE INTO relations(
-                        relation_id, source_entity_id, target_entity_id, predicate,
-                        observation_ids_json, confidence, payload_json
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    UPDATE relations
+                    SET observation_ids_json = ?, confidence = ?, payload_json = ?
+                    WHERE relation_id = ?
                     """,
                     (
+                        json.dumps(observation_ids, ensure_ascii=False),
+                        confidence,
+                        json.dumps(payload, ensure_ascii=False, sort_keys=True),
                         relation.relation_id,
-                        relation.source_entity_id,
-                        relation.target_entity_id,
-                        relation.predicate,
-                        json.dumps(relation.observation_ids, ensure_ascii=False),
-                        relation.confidence,
-                        json.dumps(relation.model_dump(mode="json"), ensure_ascii=False, sort_keys=True),
                     ),
                 )
 
@@ -408,7 +435,15 @@ class Graph3Store:
         entity_ids: list[str],
         *,
         max_hops: int = 1,
-        allowed_predicates: tuple[str, ...] = ("co_occurs_in_observation",),
+        allowed_predicates: tuple[str, ...] = (
+            "provides_input_to",
+            "takes_input_from",
+            "derived_from",
+            "uses",
+            "predicts",
+            "reconstructs",
+            "co_occurs_in_observation",
+        ),
     ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
         """Expand only typed edges and return paths plus observation hits."""
         if max_hops < 1 or not entity_ids:
@@ -449,6 +484,7 @@ class Graph3Store:
                         "target_name": row["target_name"],
                         "observation_ids": ids,
                         "confidence": row["confidence"],
+                        "extraction_method": json.loads(row["payload_json"]).get("extraction_method"),
                     }
                 )
                 next_frontier.add(other_id)
