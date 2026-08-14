@@ -26,6 +26,7 @@ from .pipeline import GraphBuildStats, build_relation_graph, ingest_and_build_gr
 from .zenbrain import ZenBrainEventLedger, ZenBrainEventType
 from .fsrs import FSRSAdapterError, NodeZenBrainFSRS
 from .answer_feedback import AnswerEvidenceContext, AnswerFeedbackRecorder, FeedbackRequest, FeedbackResult
+from .answer import AnswerCitation, AnswerDraft, AnswerEvidence, AnswerSection, assemble_answer
 
 __all__ = [
     "ClaimVersion",
@@ -64,4 +65,9 @@ __all__ = [
     "AnswerFeedbackRecorder",
     "FeedbackRequest",
     "FeedbackResult",
+    "AnswerCitation",
+    "AnswerDraft",
+    "AnswerEvidence",
+    "AnswerSection",
+    "assemble_answer",
 ]

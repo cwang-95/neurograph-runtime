@@ -615,6 +615,12 @@ class Graph3Retriever:
         candidates = visible_candidates
         evidence = self._select_evidence(plan, candidates, limit)
         conflict_versions: dict[str, list[dict[str, Any]]] = {}
+        claim_observation_ids: dict[str, set[str]] = {}
+        for observation_id, version_ids in claim_ids_by_observation.items():
+            for version_id in version_ids:
+                claim_id = claim_projection.get(version_id, {}).get("claim_id")
+                if claim_id:
+                    claim_observation_ids.setdefault(version_id, set()).add(observation_id)
         for item in evidence:
             for claim_version_id in item.claim_version_ids:
                 record = claim_projection.get(claim_version_id)
@@ -622,6 +628,17 @@ class Graph3Retriever:
                     conflict_versions.setdefault(record["claim_id"], []).append(record)
         conflicts = []
         for claim_id, versions in conflict_versions.items():
+            source_observations = {
+                observation_id
+                for version in versions
+                for observation_id in claim_observation_ids.get(version["claim_version_id"], set())
+            }
+            # A single extracted observation may contain a runtime breakdown
+            # (for example, three component times plus a total).  Without a
+            # metric-aware extractor, those values are not enough to call a
+            # contradiction. Independent observations are required.
+            if len(source_observations) < 2:
+                continue
             unique_values = {
                 (repr(version.get("object_value")), version.get("unit"))
                 for version in versions

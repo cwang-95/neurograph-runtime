@@ -415,6 +415,21 @@ EvidencePack 是 Codex、OpenClaw 或独立回答模型消费的稳定接口，�
 
 `evidence` 和 `graph-evidence` 模式返回 EvidencePack，不调用最终回答模型；`answer` 模式才执行一次回答生成。Codex/OpenClaw 已经承担回答时，不再调用内部 DeepSeek 生成第二份答案。
 
+当前回答组装层提供确定性的 `AnswerDraft`，只消费 EvidencePack，不新增事实：
+
+```bash
+# 项目依赖安装在 ~/.cognee-venv 时使用该环境执行
+~/.cognee-venv/bin/python scripts/graph3_answer "GeoDose 的机制和结果" \
+  --storage-root data/graph3 \
+  --top 20 --max-items 6 > answer-draft.json
+```
+
+`AnswerDraft.status` 为 `answer`、`follow_up` 或 `conflict`。正常回答按机制、量化
+结果等槽位分组，并为每段证据分配 citation ID 和原始定位；缺槽位时输出追问；未
+裁决冲突时不生成单一结论。该层不调用 DeepSeek，Codex/OpenClaw 可以直接消费
+`response_markdown`，也可以把同一 JSON 交给最终回答模型润色，但模型只能引用其中
+的 `citations` 和 `sections`。
+
 ## 8. 歧义、冲突与纠错
 
 ### 8.1 追问策略
@@ -435,6 +450,10 @@ EvidencePack 是 Codex、OpenClaw 或独立回答模型消费的稳定接口，�
 - 作者观点或来源之间存在真实争议；
 - 同一来源内部自相矛盾；
 - 重复表述但并不冲突。
+
+同一来源中明确列出的多个组件指标（例如各模块耗时和总耗时）先视为一个 breakdown，
+不能仅因数值不同就标成冲突；至少需要来自两个独立 Observation 的不同值，才进入
+未裁决冲突路径。
 
 明显解析错误由单位一致性、上下文、总量约束、原生 PPT 数据和更高等级来源自动裁决，不把所有错误候选展示给用户。只有来源等级接近、条件相同且无法可靠裁决时才请求确认。
 
