@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any, Sequence
 
 from .entities import extract_cooccurrence_relations, extract_entities, extract_semantic_relations
+from .extract import extract_numeric_claims
 from .ingest import IngestResult, ingest_markdown
 from .llm_relations import DeepSeekRelationClient
 from .models import Entity, Observation, Relation
@@ -16,6 +17,8 @@ from .store import Graph3Store
 @dataclass(frozen=True)
 class GraphBuildStats:
     observation_count: int
+    claim_candidates: int
+    evidence_links_submitted: int
     entity_count: int
     deterministic_relation_candidates: int
     llm_calls: int
@@ -47,6 +50,7 @@ def build_relation_graph(
 
     entities: dict[str, Entity] = {}
     relations: list[Relation] = []
+    claims = []
     deterministic_count = 0
     llm_calls = 0
     llm_accepted = 0
@@ -54,6 +58,7 @@ def build_relation_graph(
     budget_exhausted = False
 
     for observation in observations:
+        claims.extend(extract_numeric_claims(observation))
         extracted_entities = extract_entities(observation)
         entities.update({entity.entity_id: entity for entity in extracted_entities})
         deterministic = extract_semantic_relations(observation, extracted_entities)
@@ -73,9 +78,12 @@ def build_relation_graph(
         llm_accepted += len(output.accepted)
         llm_rejected += len(output.rejected)
 
+    store.put_claims(claims)
     store.put_graph(list(entities.values()), relations)
     return GraphBuildStats(
         observation_count=len(observations),
+        claim_candidates=len(claims),
+        evidence_links_submitted=len(claims),
         entity_count=len(entities),
         deterministic_relation_candidates=deterministic_count,
         llm_calls=llm_calls,

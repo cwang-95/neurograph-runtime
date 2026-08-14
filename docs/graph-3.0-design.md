@@ -559,6 +559,22 @@ printf '%s' '<反馈 JSON>' | scripts/graph3_feedback \
 - 不把数据库放入 Python 包安装目录；
 - 运行配置、数据路径和模型版本必须由统一配置读取，文档不得与代码各写一份真相。
 
+当前重建入口：
+
+```bash
+# 单文件
+scripts/graph3_ingest talk.md --storage-root data/graph3 --dataset aapm_videos
+
+# 目录批量重建；默认同时抽取确定性 Claim/EvidenceLink，DeepSeek 关系候选仍需显式开启
+scripts/graph3_rebuild /path/to/markdown-dir \
+  --storage-root data/graph3 --dataset wiki_full \
+  --report data/graph3-rebuild-report.json
+```
+
+重建按内容地址和稳定 ID 幂等，可重复执行；报告区分 Observation、Claim、
+EvidenceLink、实体、确定性关系和 DeepSeek 调用预算。当前向量索引仍需单独
+执行可重建的 embedding/index 步骤。
+
 ## 11. 实施与迁移策略
 
 3.0 在独立分支和 worktree 中开发，避免影响 OpenClaw 当前使用的 2.0：
