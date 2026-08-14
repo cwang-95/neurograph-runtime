@@ -214,6 +214,52 @@ GeoDose method supports dose calculation.
             self.assertIn("DREME", pack.follow_up_questions[0].options)
             self.assertIn("GeoDose", pack.follow_up_questions[0].options)
 
+    def test_explicit_framework_subject_does_not_trigger_ambiguity_follow_up(self):
+        source = """# Talk
+
+## Slide 1
+
+### PPT 视觉提取
+
+AI-driven in-treatment adaptation framework uses DREME for anatomy reconstruction and GeoDose for dose accumulation.
+"""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            source_path = Path(temp_dir) / "talk.md"
+            source_path.write_text(source, encoding="utf-8")
+            result = ingest_markdown(source_path, storage_root=Path(temp_dir) / "assets", dataset="fixture")
+            with Graph3Store(Path(temp_dir) / "db") as store:
+                store.put_ingest_result(result)
+                pack = Graph3Retriever(store).retrieve(
+                    "AI-driven in-treatment adaptation framework 的完整流程",
+                    limit=5,
+                )
+
+            self.assertFalse(pack.follow_up_required)
+            self.assertEqual(pack.slot_status["mechanism"], SlotStatus.SUPPORTED)
+
+    def test_runtime_words_require_quantitative_slot(self):
+        source = """# Talk
+
+## Slide 1
+
+### PPT 视觉提取
+
+GeoDose dose accumulation takes 70.1 ms.
+"""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            source_path = Path(temp_dir) / "talk.md"
+            source_path.write_text(source, encoding="utf-8")
+            result = ingest_markdown(source_path, storage_root=Path(temp_dir) / "assets", dataset="fixture")
+            with Graph3Store(Path(temp_dir) / "db") as store:
+                store.put_ingest_result(result)
+                pack = Graph3Retriever(store).retrieve(
+                    "GeoDose 的机制、输入、输出和运行时间",
+                    limit=5,
+                )
+
+            self.assertIn("quantitative_result", pack.slot_status)
+            self.assertEqual(pack.slot_status["quantitative_result"], SlotStatus.SUPPORTED)
+
 
 if __name__ == "__main__":
     unittest.main()
