@@ -426,7 +426,7 @@ class Graph3Store:
         rows = self.connection.execute(
             """
             SELECT e.observation_id, e.vector_json, o.*, s.locator_json,
-                   s.asset_id, s.element_type
+                   s.asset_id, s.element_type, s.duplicate_group_id
             FROM observation_embeddings e
             JOIN observations o ON o.observation_id = e.observation_id
             JOIN source_elements s ON s.element_id = o.element_id
@@ -449,6 +449,16 @@ class Graph3Store:
         return hits[:limit]
 
     def _observation_hit(self, row: sqlite3.Row, **scores: float) -> dict[str, Any]:
+        kind_quality = {
+            "manual": 1.0,
+            "native_text": 0.95,
+            "vision": 0.85,
+            "ocr": 0.8,
+            "asr": 0.75,
+            "contextual_prefix": 0.6,
+        }.get(row["kind"], 0.5)
+        confidence = row["confidence"]
+        source_quality = kind_quality if confidence is None else (kind_quality + float(confidence)) / 2.0
         hit = {
             "observation_id": row["observation_id"],
             "element_id": row["element_id"],
@@ -458,6 +468,8 @@ class Graph3Store:
             "asset_id": row["asset_id"],
             "element_type": row["element_type"],
             "locator": json.loads(row["locator_json"]),
+            "duplicate_group_id": row["duplicate_group_id"],
+            "source_quality": source_quality,
             "matched_terms": 0,
             "matched_numbers": 0,
             "lexical_score": 0.0,
@@ -704,7 +716,7 @@ class Graph3Store:
         placeholders = ",".join("?" for _ in observation_ids)
         rows = self.connection.execute(
             f"""
-            SELECT o.*, s.locator_json, s.asset_id, s.element_type
+            SELECT o.*, s.locator_json, s.asset_id, s.element_type, s.duplicate_group_id
             FROM observations o
             JOIN source_elements s ON s.element_id = o.element_id
             WHERE o.observation_id IN ({placeholders})
@@ -734,7 +746,7 @@ class Graph3Store:
             return []
         rows = self.connection.execute(
             """
-            SELECT o.*, s.locator_json, s.asset_id, s.element_type,
+            SELECT o.*, s.locator_json, s.asset_id, s.element_type, s.duplicate_group_id,
                    s.parent_id, s.previous_id, s.next_id
             FROM observations o
             JOIN source_elements s ON s.element_id = o.element_id
@@ -988,7 +1000,7 @@ class Graph3Store:
                 rows = list(
                     self.connection.execute(
                         """
-                        SELECT o.*, e.locator_json, e.asset_id, e.element_type
+            SELECT o.*, e.locator_json, e.asset_id, e.element_type, e.duplicate_group_id
                         FROM observation_fts f
                         JOIN observations o ON o.observation_id = f.observation_id
                         JOIN source_elements e ON e.element_id = o.element_id
@@ -1007,7 +1019,7 @@ class Graph3Store:
                 rows = list(
                     self.connection.execute(
                         f"""
-                        SELECT o.*, e.locator_json, e.asset_id, e.element_type
+                        SELECT o.*, e.locator_json, e.asset_id, e.element_type, e.duplicate_group_id
                         FROM observations o
                         JOIN source_elements e ON e.element_id = o.element_id
                         WHERE {clauses}

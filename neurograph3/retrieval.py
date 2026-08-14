@@ -99,6 +99,8 @@ class EvidenceItem(BaseModel):
     asset_id: str
     element_type: str
     locator: dict[str, Any]
+    duplicate_group_id: str | None = None
+    source_quality: float = 0.5
     lexical_score: float
     matched_terms: int
     matched_numbers: int
@@ -115,6 +117,8 @@ class EvidenceItem(BaseModel):
     route_contributions: dict[str, float] = Field(default_factory=dict)
     combined_score: float = 0.0
     retrieval_routes: list[str] = Field(default_factory=list)
+    supporting_observation_ids: list[str] = Field(default_factory=list)
+    supporting_citations: list[dict[str, Any]] = Field(default_factory=list)
     context_of_observation_ids: list[str] = Field(default_factory=list)
     context_relation: str | None = None
     context_distance: int | None = None
@@ -243,6 +247,41 @@ class Graph3Retriever:
         limit: int,
     ) -> list[EvidenceItem]:
         ordered = sorted(candidates.values(), key=lambda item: item["combined_score"], reverse=True)
+        deduplicated: list[dict[str, Any]] = []
+        representatives: dict[str, dict[str, Any]] = {}
+        for candidate in ordered:
+            group_id = candidate.get("duplicate_group_id") or f"observation:{candidate['observation_id']}"
+            representative = representatives.get(group_id)
+            if representative is None:
+                representative = dict(candidate)
+                representative["supporting_observation_ids"] = list(
+                    representative.get("supporting_observation_ids", [])
+                )
+                representative["supporting_citations"] = list(
+                    representative.get("supporting_citations", [])
+                )
+                representatives[group_id] = representative
+                deduplicated.append(representative)
+                continue
+            representative["supporting_observation_ids"].append(candidate["observation_id"])
+            representative["supporting_citations"].append(
+                {
+                    "observation_id": candidate["observation_id"],
+                    "asset_id": candidate["asset_id"],
+                    "element_id": candidate["element_id"],
+                    "aligned_element_ids": candidate.get("aligned_element_ids", []),
+                    "locator": candidate["locator"],
+                    "source_quality": candidate.get("source_quality", 0.5),
+                    "claim_version_ids": candidate.get("claim_version_ids", []),
+                }
+            )
+            representative["claim_version_ids"] = list(
+                dict.fromkeys(
+                    representative.get("claim_version_ids", [])
+                    + candidate.get("claim_version_ids", [])
+                )
+            )
+        ordered = deduplicated
         selected = [EvidenceItem.model_validate(item) for item in ordered[:limit]]
         if not selected:
             return []
@@ -556,6 +595,7 @@ class Graph3Retriever:
             item["fusion_score"] = sum(route_contributions.values())
             item["combined_score"] = (
                 item["fusion_score"]
+                + item["source_quality"] * 0.01
                 + item["zenbrain_prior"] * 0.1
                 + item["zenbrain_path_prior"] * 0.05
                 + item["zenbrain_edge_prior"] * 0.03
@@ -628,6 +668,7 @@ class Graph3Retriever:
                 "aligned_element_ids": item.aligned_element_ids,
                 "locator": item.locator,
                 "claim_version_ids": item.claim_version_ids,
+                "supporting_citations": item.supporting_citations,
             }
             for item in evidence
         ]
@@ -642,6 +683,15 @@ class Graph3Retriever:
                 "context_of_observation_ids": item.context_of_observation_ids,
             }
             for item in context_evidence
+        )
+        citations.extend(
+            {
+                **supporting,
+                "role": "supporting",
+                "supported_by_observation_id": item.observation_id,
+            }
+            for item in evidence
+            for supporting in item.supporting_citations
         )
         plan = plan.model_copy(
             update={

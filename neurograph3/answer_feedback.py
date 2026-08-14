@@ -30,6 +30,11 @@ class AnswerEvidenceContext(BaseModel):
             observation_ids=[
                 item.observation_id
                 for item in [*pack.evidence, *pack.context_evidence]
+            ]
+            + [
+                observation_id
+                for item in pack.evidence
+                for observation_id in item.supporting_observation_ids
             ],
             claim_version_ids=[
                 claim_id
