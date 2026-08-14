@@ -338,22 +338,45 @@ class Graph3Store:
                 )
 
     def search_entities(self, query: str, limit: int = 20) -> list[dict[str, Any]]:
-        tokens = [token for token in re.findall(r"[A-Za-z0-9_-]+|[\u4e00-\u9fff]+", query.casefold()) if len(token) > 1]
-        if not tokens:
+        if limit < 1:
             return []
-        clauses = " OR ".join("lower(canonical_name) LIKE ? OR lower(aliases_json) LIKE ?" for _ in tokens)
-        params: list[str | int] = []
-        for token in tokens:
-            params.extend((f"%{token}%", f"%{token}%"))
-        params.append(limit)
         rows = self.connection.execute(
-            f"""
+            """
             SELECT entity_id, canonical_name, entity_type, aliases_json
             FROM entities
-            WHERE {clauses}
+            ORDER BY canonical_name
             LIMIT ?
             """,
-            params,
+            (max(limit, 100),),
+        ).fetchall()
+        normalized_query = " ".join(query.casefold().split())
+        matches = []
+        for row in rows:
+            aliases = json.loads(row["aliases_json"])
+            names = (row["canonical_name"], *aliases)
+            if not any(" ".join(name.casefold().split()) in normalized_query for name in names):
+                continue
+            matches.append(
+                {
+                    "entity_id": row["entity_id"],
+                    "canonical_name": row["canonical_name"],
+                    "entity_type": row["entity_type"],
+                    "aliases": aliases,
+                }
+            )
+            if len(matches) >= limit:
+                break
+        return matches
+
+    def list_entities(self, limit: int = 100) -> list[dict[str, Any]]:
+        rows = self.connection.execute(
+            """
+            SELECT entity_id, canonical_name, entity_type, aliases_json
+            FROM entities
+            ORDER BY canonical_name
+            LIMIT ?
+            """,
+            (limit,),
         ).fetchall()
         return [
             {

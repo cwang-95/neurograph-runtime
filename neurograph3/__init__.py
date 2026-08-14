@@ -8,7 +8,7 @@ from .models import (
     SourceElement,
     SourceLocator,
 )
-from .retrieval import EvidencePack, Graph3Retriever, QueryPlan
+from .retrieval import EvidencePack, FollowUpQuestion, Graph3Retriever, QueryPlan
 from .store import Graph3Store
 from .extract import extract_numeric_claims
 from .entities import extract_cooccurrence_relations, extract_entities
@@ -23,6 +23,7 @@ __all__ = [
     "SourceElement",
     "SourceLocator",
     "EvidencePack",
+    "FollowUpQuestion",
     "Graph3Retriever",
     "Graph3Store",
     "QueryPlan",
