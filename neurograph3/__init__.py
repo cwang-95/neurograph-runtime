@@ -8,6 +8,8 @@ from .models import (
     SourceElement,
     SourceLocator,
 )
+from .retrieval import EvidencePack, Graph3Retriever, QueryPlan
+from .store import Graph3Store
 
 __all__ = [
     "ClaimVersion",
@@ -16,4 +18,8 @@ __all__ = [
     "RawAsset",
     "SourceElement",
     "SourceLocator",
+    "EvidencePack",
+    "Graph3Retriever",
+    "Graph3Store",
+    "QueryPlan",
 ]
