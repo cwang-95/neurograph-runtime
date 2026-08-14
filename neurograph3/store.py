@@ -237,17 +237,16 @@ class Graph3Store:
         payload: dict[str, Any] | None = None,
     ) -> str:
         occurred_at = created_at or datetime.now(timezone.utc)
-        event_id = stable_id(
-            "zenbrain_event",
-            {
-                "target_type": target_type,
-                "target_id": target_id,
-                "event_type": event_type,
-                "query": query,
-                "caller": caller,
-                "path_id": path_id,
-                "created_at": occurred_at.isoformat(),
-            },
+        event_payload = payload or {}
+        event_id = self.zenbrain_event_id(
+            target_type=target_type,
+            target_id=target_id,
+            event_type=event_type,
+            query=query,
+            caller=caller,
+            path_id=path_id,
+            created_at=occurred_at,
+            payload=event_payload,
         )
         with self.connection:
             self.connection.execute(
@@ -267,10 +266,60 @@ class Graph3Store:
                     caller,
                     path_id,
                     occurred_at.isoformat(),
-                    json.dumps(payload or {}, ensure_ascii=False, sort_keys=True),
+                    json.dumps(event_payload, ensure_ascii=False, sort_keys=True),
                 ),
             )
         return event_id
+
+    def zenbrain_event_id(
+        self,
+        *,
+        target_type: str,
+        target_id: str,
+        event_type: str,
+        query: str | None = None,
+        caller: str | None = None,
+        path_id: str | None = None,
+        created_at: datetime | None = None,
+        payload: dict[str, Any] | None = None,
+    ) -> str:
+        occurred_at = created_at or datetime.now(timezone.utc)
+        feedback_id = (payload or {}).get("feedback_id")
+        return stable_id(
+            "zenbrain_event",
+            {
+                "target_type": target_type,
+                "target_id": target_id,
+                "event_type": event_type,
+                "query": query,
+                "caller": caller,
+                "path_id": path_id,
+                "feedback_id": feedback_id,
+                "created_at": None if feedback_id else occurred_at.isoformat(),
+            },
+        )
+
+    def zenbrain_event_exists(self, event_id: str) -> bool:
+        row = self.connection.execute(
+            "SELECT 1 FROM zenbrain_events WHERE event_id = ?",
+            (event_id,),
+        ).fetchone()
+        return row is not None
+
+    def zenbrain_feedback_counts(self, feedback_id: str) -> dict[str, int]:
+        rows = self.connection.execute(
+            "SELECT target_type, payload_json FROM zenbrain_events"
+        ).fetchall()
+        counts: dict[str, int] = {}
+        for row in rows:
+            try:
+                payload = json.loads(row["payload_json"])
+            except (TypeError, json.JSONDecodeError):
+                continue
+            if payload.get("feedback_id") == feedback_id:
+                target_type = row["target_type"]
+                counts[target_type] = counts.get(target_type, 0) + 1
+        return counts
 
     def zenbrain_event_history(
         self,

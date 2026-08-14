@@ -1,0 +1,36 @@
+#!/usr/bin/env python3
+"""Query the Graph 3.0 evidence layer and emit an addressable EvidencePack."""
+
+from __future__ import annotations
+
+import argparse
+import sys
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(HERE))
+
+from neurograph3.fsrs import NodeZenBrainFSRS
+from neurograph3.retrieval import Graph3Retriever
+from neurograph3.store import Graph3Store
+from neurograph3.zenbrain import ZenBrainEventLedger
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Query Graph 3.0 evidence")
+    parser.add_argument("query")
+    parser.add_argument("--storage-root", type=Path, default=HERE / "data" / "graph3")
+    parser.add_argument("--top", type=int, default=8)
+    parser.add_argument("--fsrs", action="store_true", help="read existing ZenBrain FSRS priors")
+    args = parser.parse_args()
+
+    fsrs = NodeZenBrainFSRS() if args.fsrs else None
+    with Graph3Store(args.storage_root) as store:
+        ledger = ZenBrainEventLedger(store, fsrs=fsrs)
+        pack = Graph3Retriever(store, zenbrain_prior=ledger).retrieve(args.query, limit=args.top)
+        print(pack.model_dump_json(ensure_ascii=False))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

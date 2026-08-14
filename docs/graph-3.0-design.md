@@ -2,7 +2,7 @@
 
 状态：设计基线 v0.2（已完成首轮技术 review；Phase 0–5 与证据覆盖基础已在 `feature/graph-3.0` 落地，尚未切换 OpenClaw 默认入口）
 
-当前实现边界：已具备 RawAsset/SourceElement/Observation、Claim/EvidenceLink、保守实体图、显式模式语义关系、多证据关系聚合、DeepSeek 结构化关系候选及严格审核、可控批量构建入口、受 hop/beam/关系白名单约束的多跳图扩展、ZenBrain 追加事件账本与弱先验、多路 lexical/numeric/vector/graph 召回、EvidencePack 槽位覆盖与确定性追问、现有 ZenBrain FSRS 调度器适配、Observation/ClaimVersion/Relation/Path 显式回答反馈接口、ClaimVersion 抑制与冲突投影。向量检索当前是可重建的 SQLite brute-force 基线，DeepSeek 只生成候选，不直接改变权威事实；边/路径/Claim 目前使用事件弱先验，尚未有独立 FSRS 状态，ANN 索引仍未接入。
+当前实现边界：已具备 RawAsset/SourceElement/Observation、Claim/EvidenceLink、保守实体图、显式模式语义关系、多证据关系聚合、DeepSeek 结构化关系候选及严格审核、可控批量构建入口、受 hop/beam/关系白名单约束的多跳图扩展、ZenBrain 追加事件账本与弱先验、多路 lexical/numeric/vector/graph 召回、EvidencePack 槽位覆盖与确定性追问、现有 ZenBrain FSRS 调度器适配、Observation/ClaimVersion/Relation/Path 显式回答反馈接口、ClaimVersion 抑制与冲突投影、Codex/OpenClaw 通用反馈协议与 CLI。向量检索当前是可重建的 SQLite brute-force 基线，DeepSeek 只生成候选，不直接改变权威事实；边/路径/Claim 目前使用事件弱先验，尚未有独立 FSRS 状态，ANN 索引仍未接入。
 
 ## 1. 目标、原则与边界
 
@@ -502,6 +502,41 @@ FSRS 节点状态都不增加；这条约束纳入回归测试。
 EvidencePack 的 `conflicts` 只报告同一逻辑 Claim 下仍未裁决的不同版本；
 若某一 ClaimVersion 已被明确纠正、拒绝或静态标为 superseded/rejected，
 该版本不会进入回答证据，但原始 Observation 仍保留在权威存储中供审计。
+
+### 9.4 Codex/OpenClaw 回答层反馈协议
+
+回答模型完成回答后，只提交本次 EvidencePack 中实际使用的 ID，不提交自由文本事实：
+
+```python
+from neurograph3.answer_feedback import AnswerFeedbackRecorder, FeedbackRequest
+from neurograph3.zenbrain import ZenBrainEventType
+
+request = FeedbackRequest.from_pack(
+    pack,
+    ZenBrainEventType.CITED,
+    observation_ids=[item.observation_id for item in pack.evidence[:2]],
+    claim_version_ids=[claim_id for item in pack.evidence for claim_id in item.claim_version_ids],
+    relation_ids=[edge["relation_id"] for path in pack.graph_paths for edge in path["path_edges"]],
+    path_ids=[path["path_id"] for path in pack.graph_paths],
+    caller="openclaw",  # 或 codex
+    feedback_id="answer-turn-2026-08-14-001",
+)
+AnswerFeedbackRecorder(store, ledger).record(request)
+```
+
+协议会校验所有目标 ID 是否属于该 EvidencePack；越权 ID 直接拒绝。重复
+`feedback_id` 不新增事件，也不重复 FSRS 强化。无 Python 集成时可调用：
+
+```bash
+scripts/graph3_query "自适应放疗的实时计划流程" \
+  --storage-root data/graph3 > evidence-pack.json
+# 回答层从 evidence-pack.json 选择实际引用的 ID 后提交反馈
+printf '%s' '<反馈 JSON>' | scripts/graph3_feedback \
+  --storage-root data/graph3
+```
+
+当前只在 3.0 分支提供适配层，OpenClaw 稳定入口仍保持不变；切换默认入口
+前需要把 `graph-evidence` 的输出改为携带这些稳定 ID，并在回答完成后调用该 CLI/API。
 
 ## 10. 存储与工程实现
 
