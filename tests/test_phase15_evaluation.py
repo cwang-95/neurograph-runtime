@@ -69,6 +69,9 @@ GeoDose runtime was 70.1 ms.
             self.assertEqual(report["pass_rate"], 1.0)
             self.assertEqual(report["citation_traceability_rate"], 1.0)
             self.assertEqual(report["results"][0]["slot_status"]["mechanism"], "supported")
+            self.assertTrue(report["results"][0]["primary_evidence_preview"])
+            previews = report["results"][0]["primary_evidence_preview"] + report["results"][0]["context_evidence_preview"]
+            self.assertTrue(any("70.1 ms" in item["value"] for item in previews))
 
 
 if __name__ == "__main__":

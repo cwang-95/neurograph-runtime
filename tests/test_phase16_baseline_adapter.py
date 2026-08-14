@@ -30,11 +30,11 @@ class Phase16BaselineAdapterTests(unittest.TestCase):
             graph3 = root / "graph3.json"
             baseline = root / "baseline.json"
             graph3.write_text(
-                json.dumps({"corpus_label": "aapm", "pass_rate": 1.0, "mean_latency_ms": 2.0, "p95_latency_ms": 3.0}),
+                json.dumps({"corpus_label": "aapm", "corpus_fingerprint": "same", "isolated_storage": True, "pass_rate": 1.0, "mean_latency_ms": 2.0, "p95_latency_ms": 3.0}),
                 encoding="utf-8",
             )
             baseline.write_text(
-                json.dumps({"corpus_label": "wiki", "pass_rate": 0.0, "mean_latency_ms": 5.0, "p95_latency_ms": 6.0}),
+                json.dumps({"corpus_label": "wiki", "corpus_fingerprint": "other", "isolated_storage": True, "pass_rate": 0.0, "mean_latency_ms": 5.0, "p95_latency_ms": 6.0}),
                 encoding="utf-8",
             )
             report = json.loads(
@@ -51,6 +51,40 @@ class Phase16BaselineAdapterTests(unittest.TestCase):
             )
             self.assertFalse(report["comparable"])
             self.assertIsNone(report["delta_graph3_minus_baseline"])
+
+    def test_ab_compare_accepts_matching_isolated_fingerprints(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            graph3 = root / "graph3.json"
+            baseline = root / "baseline.json"
+            payload = {
+                "corpus_label": "aapm",
+                "corpus_fingerprint": "same",
+                "isolated_storage": True,
+                "pass_rate": 1.0,
+                "mean_latency_ms": 2.0,
+                "p95_latency_ms": 3.0,
+            }
+            graph3.write_text(json.dumps(payload), encoding="utf-8")
+            payload["pass_rate"] = 0.5
+            payload["mean_latency_ms"] = 5.0
+            payload["p95_latency_ms"] = 6.0
+            baseline.write_text(json.dumps(payload), encoding="utf-8")
+            report = json.loads(
+                subprocess.check_output(
+                    [
+                        str(Path(__file__).resolve().parent.parent / "scripts" / "graph3_ab_compare"),
+                        "--graph3-report",
+                        str(graph3),
+                        "--baseline-report",
+                        str(baseline),
+                        "--corpus-match",
+                    ],
+                    text=True,
+                )
+            )
+            self.assertTrue(report["comparable"])
+            self.assertEqual(report["delta_graph3_minus_baseline"]["pass_rate"], 0.5)
 
 
 if __name__ == "__main__":
