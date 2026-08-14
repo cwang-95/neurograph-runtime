@@ -11,7 +11,7 @@ from .models import (
 from .retrieval import EvidencePack, FollowUpQuestion, Graph3Retriever, QueryPlan
 from .store import Graph3Store
 from .extract import extract_numeric_claims
-from .entities import extract_cooccurrence_relations, extract_entities
+from .entities import extract_cooccurrence_relations, extract_entities, extract_semantic_relations
 from .models import Entity, Relation
 from .embedding import OpenAICompatibleEmbedder
 
@@ -32,5 +32,6 @@ __all__ = [
     "Relation",
     "extract_entities",
     "extract_cooccurrence_relations",
+    "extract_semantic_relations",
     "OpenAICompatibleEmbedder",
 ]
