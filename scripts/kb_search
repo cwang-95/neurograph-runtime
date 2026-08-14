@@ -9,6 +9,7 @@
 #   --all:     查文献+项目
 # 默认: --graph-evidence（图增强证据，由 OpenClaw/Codex 上层模型回答）
 # 输出: 精简 Top 结果, 便于 agent 直接读取并基于图谱作答
+# 后端: 默认 cognee；设置 NEUROGRAPH_BACKEND=graph3 时走 Graph 3.0（仅知识域）
 # ============================================================
 cd ~/.openclaw/workspace/projects/neurograph/cognee-bridge
 export SSL_CERT_FILE=/etc/ssl/cert.pem CURL_CA_BUNDLE=/etc/ssl/cert.pem
@@ -46,6 +47,26 @@ export DASHSCOPE_API_KEY="$DSKEY"
 if [[ -z "$Q" ]]; then
   echo "用法: kb_search \"查询内容\" [topN] [--answer|--graph-evidence|--evidence] [--json]"
   exit 1
+fi
+
+# Graph 3.0 is an explicit, reversible opt-in. The stable default remains Cognee.
+if [[ "${NEUROGRAPH_BACKEND:-cognee}" == "graph3" && "$DOMAIN" != "memory" ]]; then
+  GRAPH3_ROOT="${NEUROGRAPH_GRAPH3_ROOT:-/Users/wangcheng/Projects/neurograph-graph-3.0}"
+  GRAPH3_STORAGE="${NEUROGRAPH_GRAPH3_STORAGE:-$GRAPH3_ROOT/data/graph3}"
+  GRAPH3_QUERY="$GRAPH3_ROOT/scripts/graph3_query"
+  if [[ ! -x "$GRAPH3_QUERY" ]]; then
+    echo "Graph 3.0 查询入口不存在或不可执行: $GRAPH3_QUERY" >&2
+    exit 2
+  fi
+  GRAPH3_ARGS=("$Q" --storage-root "$GRAPH3_STORAGE" --top "$TOP")
+  if [[ "${NEUROGRAPH_GRAPH3_FSRS:-0}" == "1" ]]; then
+    GRAPH3_ARGS+=(--fsrs)
+  fi
+  if [[ "$MODE" == "answer" ]]; then
+    echo "Graph 3.0 后端当前只返回 EvidencePack；请使用 --graph-evidence，由上层模型回答。" >&2
+    exit 2
+  fi
+  exec ~/.cognee-venv/bin/python -u "$GRAPH3_QUERY" "${GRAPH3_ARGS[@]}"
 fi
 
 if [[ "$DOMAIN" == "memory" ]]; then
