@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://neurograph.local/schemas/evidence_link.schema.json",
+  "title": "EvidenceLink",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["link_id", "observation_id", "claim_version_id", "relation", "strength", "created_at"],
+  "properties": {
+    "link_id": {"type": "string"},
+    "observation_id": {"type": "string"},
+    "claim_version_id": {"type": "string"},
+    "relation": {"enum": ["supports", "contradicts", "qualifies", "derived_from", "mentions", "quotes"]},
+    "strength": {"type": "number", "minimum": 0, "maximum": 1},
+    "rationale": {"type": ["string", "null"]},
+    "created_at": {"type": "string", "format": "date-time"}
+  }
+}

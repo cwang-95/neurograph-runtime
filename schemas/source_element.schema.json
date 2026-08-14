@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://neurograph.local/schemas/source_element.schema.json",
+  "title": "SourceElement",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["element_id", "asset_id", "element_type", "locator", "content_hash"],
+  "properties": {
+    "element_id": {"type": "string"},
+    "asset_id": {"type": "string"},
+    "element_type": {"type": "string"},
+    "locator": {"type": "object"},
+    "content_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "text": {"type": ["string", "null"]},
+    "parent_id": {"type": ["string", "null"]},
+    "previous_id": {"type": ["string", "null"]},
+    "next_id": {"type": ["string", "null"]},
+    "duplicate_group_id": {"type": ["string", "null"]}
+  }
+}
