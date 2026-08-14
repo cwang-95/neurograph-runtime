@@ -1,0 +1,124 @@
+#!/usr/bin/env python3
+"""Run a reproducible latency benchmark against Graph 3.0 retrieval."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import math
+import statistics
+import sys
+import time
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(HERE))
+
+from neurograph3.embedding import OpenAICompatibleEmbedder
+from neurograph3.retrieval import Graph3Retriever
+from neurograph3.store import Graph3Store
+from neurograph3.vector_index import ANNIndex, ANNUnavailable
+from neurograph3.zenbrain import ZenBrainEventLedger
+
+
+def percentile(values: list[float], fraction: float) -> float:
+    ordered = sorted(values)
+    if not ordered:
+        return 0.0
+    index = min(len(ordered) - 1, max(0, math.ceil(len(ordered) * fraction) - 1))
+    return ordered[index]
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Benchmark Graph 3.0 retrieval latency")
+    parser.add_argument("--storage-root", type=Path, default=HERE / "data" / "graph3")
+    parser.add_argument("--queries-file", type=Path, required=True, help="one query per line")
+    parser.add_argument("--rounds", type=int, default=1)
+    parser.add_argument("--top", type=int, default=8)
+    parser.add_argument("--embedding-endpoint")
+    parser.add_argument("--embedding-model", default="mlx-community/Qwen3-Embedding-0.6B-4bit-DWQ")
+    parser.add_argument("--embedding-timeout", type=float, default=30.0)
+    parser.add_argument("--ann-index", type=Path)
+    parser.add_argument("--ann-backend", choices=("auto", "hnswlib", "faiss"), default="auto")
+    parser.add_argument("--report", type=Path)
+    args = parser.parse_args()
+    if args.rounds < 1 or args.top < 1:
+        parser.error("--rounds and --top must be positive")
+    queries = [
+        line.strip()
+        for line in args.queries_file.read_text(encoding="utf-8").splitlines()
+        if line.strip() and not line.lstrip().startswith("#")
+    ]
+    if not queries:
+        parser.error("--queries-file contains no queries")
+    if args.ann_index and not args.embedding_endpoint:
+        parser.error("--ann-index requires --embedding-endpoint")
+
+    try:
+        embedder = (
+            OpenAICompatibleEmbedder(
+                endpoint=args.embedding_endpoint,
+                model=args.embedding_model,
+                timeout=args.embedding_timeout,
+            )
+            if args.embedding_endpoint
+            else None
+        )
+        vector_index = (
+            ANNIndex(args.ann_index, backend=args.ann_backend)
+            if args.ann_index
+            else None
+        )
+        timings: list[float] = []
+        evidence_counts: list[int] = []
+        follow_up_count = 0
+        route_counts: dict[str, int] = {}
+        with Graph3Store(args.storage_root) as store:
+            retriever = Graph3Retriever(
+                store,
+                embedder=embedder,
+                vector_index=vector_index,
+                zenbrain_prior=ZenBrainEventLedger(store),
+            )
+            for _ in range(args.rounds):
+                for query in queries:
+                    started = time.perf_counter()
+                    pack = retriever.retrieve(query, limit=args.top)
+                    timings.append((time.perf_counter() - started) * 1000.0)
+                    evidence_counts.append(len(pack.evidence))
+                    follow_up_count += int(pack.follow_up_required)
+                    for route in pack.retrieval_trace.get("routes", []):
+                        route_counts[route] = route_counts.get(route, 0) + 1
+        report = {
+            "storage_root": str(args.storage_root),
+            "queries_file": str(args.queries_file),
+            "query_count": len(queries),
+            "rounds": args.rounds,
+            "total_queries": len(timings),
+            "latency_ms": {
+                "min": min(timings),
+                "mean": statistics.mean(timings),
+                "p50": percentile(timings, 0.50),
+                "p95": percentile(timings, 0.95),
+                "max": max(timings),
+            },
+            "mean_evidence_count": statistics.mean(evidence_counts),
+            "follow_up_rate": follow_up_count / len(timings),
+            "route_counts": route_counts,
+            "embedding_enabled": embedder is not None,
+            "ann_backend": vector_index.backend_name if vector_index else None,
+        }
+    except (ANNUnavailable, OSError, ValueError, RuntimeError) as exc:
+        print(json.dumps({"error": str(exc)}, ensure_ascii=False))
+        return 2
+
+    encoded = json.dumps(report, ensure_ascii=False, indent=2)
+    print(encoded)
+    if args.report:
+        args.report.parent.mkdir(parents=True, exist_ok=True)
+        args.report.write_text(encoded + "\n", encoding="utf-8")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
