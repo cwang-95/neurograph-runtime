@@ -596,6 +596,31 @@ ANN 后端是可选依赖，当前环境未安装时命令会明确返回不可�
 SQLite；索引损坏、缺失、模型不一致或维度不一致时必须重新构建。安装
 `hnswlib` 或 `faiss-cpu` 后再执行重建，不应把不同 embedding 模型混入同一索引。
 
+embedding 批处理与基准入口：
+
+```bash
+# 默认只补当前模型缺失的 Observation 向量
+scripts/graph3_embedding_index \
+  --storage-root data/graph3 \
+  --embedding-endpoint http://127.0.0.1:8000/v1/embeddings \
+  --report data/graph3-embedding-report.json
+
+# 明确切换 embedding 模型或修复向量空间时，显式全量重建
+scripts/graph3_embedding_index \
+  --storage-root data/graph3 \
+  --embedding-endpoint http://127.0.0.1:8000/v1/embeddings \
+  --embedding-model <model> --force
+
+# queries.txt 每行一个问题；输出 p50/p95、证据数、追问率和路线命中次数
+scripts/graph3_benchmark \
+  --storage-root data/graph3 --queries-file queries.txt --rounds 3 \
+  --report data/graph3-benchmark.json
+```
+
+批处理写入 SQLite 权威向量表，重复执行默认跳过已有同模型向量；切换模型
+必须使用 `--force`，避免在未版本化的单表向量空间中混用模型。基准只测检索
+层，不调用回答模型，便于比较 lexical/graph/vector/ANN 路线本身的延迟与覆盖。
+
 ## 11. 实施与迁移策略
 
 3.0 在独立分支和 worktree 中开发，避免影响 OpenClaw 当前使用的 2.0：

@@ -145,10 +145,25 @@ class Graph3Retriever:
         self.zenbrain_prior = zenbrain_prior
         self.vector_index = vector_index
 
-    def index_vectors(self) -> int:
+    def index_vectors(self, *, only_missing: bool = False, force: bool = False) -> int:
+        if only_missing and force:
+            raise ValueError("only_missing and force cannot both be enabled")
         if self.embedder is None:
             return 0
         observations = self.store.list_observations()
+        model = getattr(self.embedder, "model", "unknown")
+        if only_missing:
+            existing_records = self.store.list_embedding_records(model=model)
+            existing_ids = {record["observation_id"] for record in existing_records}
+            all_models = {record["model"] for record in self.store.list_embedding_records()}
+            if all_models and all_models != {model}:
+                raise ValueError(
+                    f"embedding model {model!r} differs from existing models {sorted(all_models)!r}; "
+                    "use force=True to replace the current vector space"
+                )
+            observations = [
+                item for item in observations if item["observation_id"] not in existing_ids
+            ]
         batch_size = max(int(getattr(self.embedder, "batch_size", 16)), 1)
         indexed = 0
         for start in range(0, len(observations), batch_size):
@@ -167,11 +182,11 @@ class Graph3Retriever:
                     f"embedding count mismatch: requested {len(batch)}, got {len(vectors)}"
                 )
             self.store.put_embeddings(
-                getattr(self.embedder, "model", "unknown"),
+                model,
                 {item["observation_id"]: vector for item, vector in zip(batch, vectors)},
             )
             indexed += len(vectors)
-        if self.vector_index is not None and indexed:
+        if self.vector_index is not None and self.store.list_embedding_records():
             self.vector_index.rebuild(self.store.list_embedding_records())
         return indexed
 
