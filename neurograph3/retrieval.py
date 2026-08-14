@@ -30,7 +30,7 @@ _QUERY_EXPANSIONS = (
 )
 
 
-def _expand_query_for_vector(query: str) -> tuple[str, list[str]]:
+def _expand_query_for_retrieval(query: str) -> tuple[str, list[str]]:
     """Add conservative bilingual seed terms without changing the user query."""
     matched = [(chinese, english) for chinese, english in _QUERY_EXPANSIONS if chinese in query]
     expansions = [
@@ -471,11 +471,18 @@ class Graph3Retriever:
             elif route == "graph":
                 item["graph_score"] = max(float(item.get("graph_score") or 0.0), float(score or 0.0))
 
-        lexical_hits = self.store.search_lexical(query, limit=min(limit * 3, plan.max_candidates))
+        retrieval_query, query_expansions = _expand_query_for_retrieval(query)
+        if query_expansions:
+            trace["query_expansions"] = query_expansions
+
+        lexical_hits = self.store.search_lexical(
+            retrieval_query,
+            limit=min(limit * 3, plan.max_candidates),
+        )
         for rank, hit in enumerate(lexical_hits, start=1):
             add_hit(hit, "lexical", rank=rank)
 
-        entity_hits = self.store.search_entities(query, limit=10)
+        entity_hits = self.store.search_entities(retrieval_query, limit=10)
         entity_ids = [item["entity_id"] for item in entity_hits]
         graph_paths, graph_hits = self.store.expand_graph(
             entity_ids,
@@ -499,10 +506,7 @@ class Graph3Retriever:
 
         if self.embedder is not None:
             try:
-                embedding_query, query_expansions = _expand_query_for_vector(query)
-                query_vector = self.embedder.embed([embedding_query])[0]
-                if query_expansions:
-                    trace["query_expansions"] = query_expansions
+                query_vector = self.embedder.embed([retrieval_query])[0]
                 vector_limit = min(limit * 3, plan.max_candidates)
                 if self.vector_index is None:
                     vector_hits = self.store.search_vector(query_vector, limit=vector_limit)
