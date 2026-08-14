@@ -69,6 +69,21 @@ if [[ "${NEUROGRAPH_BACKEND:-cognee}" == "graph3" && "$DOMAIN" != "memory" ]]; t
   if [[ "${NEUROGRAPH_GRAPH3_FSRS:-0}" == "1" ]]; then
     GRAPH3_ARGS+=(--fsrs)
   fi
+  if [[ -n "${NEUROGRAPH_GRAPH3_EMBEDDING_ENDPOINT:-}" ]]; then
+    GRAPH3_ARGS+=(--embedding-endpoint "$NEUROGRAPH_GRAPH3_EMBEDDING_ENDPOINT")
+  fi
+  if [[ -n "${NEUROGRAPH_GRAPH3_EMBEDDING_MODEL:-}" ]]; then
+    GRAPH3_ARGS+=(--embedding-model "$NEUROGRAPH_GRAPH3_EMBEDDING_MODEL")
+  fi
+  if [[ -n "${NEUROGRAPH_GRAPH3_EMBEDDING_TIMEOUT:-}" ]]; then
+    GRAPH3_ARGS+=(--embedding-timeout "$NEUROGRAPH_GRAPH3_EMBEDDING_TIMEOUT")
+  fi
+  if [[ -n "${NEUROGRAPH_GRAPH3_ANN_INDEX:-}" ]]; then
+    GRAPH3_ARGS+=(--ann-index "$NEUROGRAPH_GRAPH3_ANN_INDEX")
+  fi
+  if [[ -n "${NEUROGRAPH_GRAPH3_ANN_BACKEND:-}" ]]; then
+    GRAPH3_ARGS+=(--ann-backend "$NEUROGRAPH_GRAPH3_ANN_BACKEND")
+  fi
   if [[ "$MODE" == "answer" ]]; then
     echo "Graph 3.0 后端当前只返回 EvidencePack；请使用 --graph-evidence，由上层模型回答。" >&2
     exit 2
