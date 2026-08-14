@@ -104,6 +104,7 @@ class EvidenceItem(BaseModel):
     matched_numbers: int
     vector_score: float | None = None
     graph_score: float | None = None
+    zenbrain_prior: float = 0.0
     combined_score: float = 0.0
     retrieval_routes: list[str] = Field(default_factory=list)
 
@@ -126,9 +127,10 @@ class EvidencePack(BaseModel):
 
 
 class Graph3Retriever:
-    def __init__(self, store: Graph3Store, embedder: Any | None = None):
+    def __init__(self, store: Graph3Store, embedder: Any | None = None, zenbrain_prior: Any | None = None):
         self.store = store
         self.embedder = embedder
+        self.zenbrain_prior = zenbrain_prior
 
     def index_vectors(self) -> int:
         if self.embedder is None:
@@ -340,11 +342,22 @@ class Graph3Retriever:
             except Exception as exc:  # keep lexical/graph retrieval available
                 trace["vector_error"] = str(exc)
 
+        prior_scores: dict[str, float] = {}
+        if self.zenbrain_prior is not None and candidates:
+            try:
+                prior_scores = self.zenbrain_prior.score(list(candidates))
+                trace["routes"].append("zenbrain_prior")
+                trace["zenbrain_prior_candidates"] = len(prior_scores)
+            except Exception as exc:  # keep evidence retrieval available
+                trace["zenbrain_prior_error"] = str(exc)
+
         for item in candidates.values():
+            item["zenbrain_prior"] = max(-1.0, min(1.0, float(prior_scores.get(item["observation_id"], 0.0))))
             item["combined_score"] = (
                 float(item.get("lexical_score", 0.0))
                 + float(item.get("vector_score", 0.0) or 0.0)
                 + float(item.get("graph_score", 0.0) or 0.0) * 0.5
+                + item["zenbrain_prior"] * 0.1
             )
         evidence = self._select_evidence(plan, candidates, limit)
         slot_status, slot_evidence = self._evaluate_slots(plan, evidence)
