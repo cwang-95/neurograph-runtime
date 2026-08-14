@@ -638,6 +638,20 @@ scripts/graph3_benchmark \
 必须使用 `--force`，避免在未版本化的单表向量空间中混用模型。基准只测检索
 层，不调用回答模型，便于比较 lexical/graph/vector/ANN 路线本身的延迟与覆盖。
 
+Gold-query 评测入口：
+
+```bash
+scripts/graph3_eval \
+  --storage-root data/graph3 \
+  --gold-file evaluation/aapm-smoke-gold.json \
+  --report data/graph3-evaluation.json
+```
+
+Gold case 可声明 `expected_terms`、`expected_observation_ids`、必需
+`required_slots` 和 `must_follow_up`。报告分别记录主证据命中、上下文命中、
+槽位状态、追问结果、引用可追溯率、重复率和延迟；它不调用最终回答模型，
+因此可以作为 Graph 3.0 与 2.0/其他检索器的共同评测协议。
+
 ## 11. 实施与迁移策略
 
 3.0 在独立分支和 worktree 中开发，避免影响 OpenClaw 当前使用的 2.0：

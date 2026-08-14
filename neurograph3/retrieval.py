@@ -59,7 +59,7 @@ class QueryPlan(BaseModel):
     @classmethod
     def from_query(cls, query: str) -> "QueryPlan":
         lowered = query.casefold()
-        query_types = ["exact_fact"] if re.search(r"\d", query) else ["exploratory"]
+        query_types = ["exact_fact", "quantitative_result"] if re.search(r"\d", query) else ["exploratory"]
         if any(word in lowered for word in ("方法", "流程", "机制", "怎么")):
             query_types.append("mechanism")
         if any(word in lowered for word in ("结果", "效果", "指标", "准确", "性能")):
