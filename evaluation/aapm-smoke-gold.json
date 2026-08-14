@@ -1,0 +1,22 @@
+[
+  {
+    "id": "aapm-title",
+    "query": "Intelligent In-Treatment Planning Framework",
+    "expected_terms": ["Intelligent In-treatment Planning Framework"],
+    "must_follow_up": false
+  },
+  {
+    "id": "aapm-runtime",
+    "query": "70.1 ms",
+    "expected_terms": ["70.1 ms"],
+    "required_slots": ["quantitative_result"],
+    "must_follow_up": false
+  },
+  {
+    "id": "aapm-mechanism-results",
+    "query": "GeoDose 的机制和结果",
+    "expected_terms": ["DREME", "GeoDose", "70.1 ms"],
+    "required_slots": ["mechanism", "quantitative_result"],
+    "must_follow_up": false
+  }
+]
