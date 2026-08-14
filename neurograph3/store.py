@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from .ingest import IngestResult
-from .models import ClaimVersion, EvidenceLink
+from .models import ClaimVersion, Entity, EvidenceLink, Relation
 
 
 class Graph3Store:
@@ -87,6 +87,24 @@ class Graph3Store:
                 claim_version_id TEXT NOT NULL REFERENCES claim_versions(claim_version_id),
                 relation TEXT NOT NULL,
                 strength REAL NOT NULL,
+                payload_json TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS entities (
+                entity_id TEXT PRIMARY KEY,
+                canonical_name TEXT NOT NULL,
+                entity_type TEXT NOT NULL,
+                aliases_json TEXT NOT NULL,
+                payload_json TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS relations (
+                relation_id TEXT PRIMARY KEY,
+                source_entity_id TEXT NOT NULL REFERENCES entities(entity_id),
+                target_entity_id TEXT NOT NULL REFERENCES entities(entity_id),
+                predicate TEXT NOT NULL,
+                observation_ids_json TEXT NOT NULL,
+                confidence REAL NOT NULL,
                 payload_json TEXT NOT NULL
             );
 
@@ -168,7 +186,7 @@ class Graph3Store:
     def counts(self) -> dict[str, int]:
         return {
             table: int(self.connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])
-            for table in ("raw_assets", "source_elements", "observations", "claim_versions", "evidence_links")
+            for table in ("raw_assets", "source_elements", "observations", "claim_versions", "evidence_links", "entities", "relations")
         }
 
     def put_claims(self, claims: list[tuple[ClaimVersion, EvidenceLink]]) -> None:
@@ -210,6 +228,42 @@ class Graph3Store:
                     ),
                 )
 
+    def put_graph(self, entities: list[Entity], relations: list[Relation]) -> None:
+        """Persist conservative entity/relation candidates idempotently."""
+        with self.connection:
+            for entity in entities:
+                self.connection.execute(
+                    """
+                    INSERT OR IGNORE INTO entities(
+                        entity_id, canonical_name, entity_type, aliases_json, payload_json
+                    ) VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (
+                        entity.entity_id,
+                        entity.canonical_name,
+                        entity.entity_type,
+                        json.dumps(entity.aliases, ensure_ascii=False),
+                        json.dumps(entity.model_dump(mode="json"), ensure_ascii=False, sort_keys=True),
+                    ),
+                )
+            for relation in relations:
+                self.connection.execute(
+                    """
+                    INSERT OR IGNORE INTO relations(
+                        relation_id, source_entity_id, target_entity_id, predicate,
+                        observation_ids_json, confidence, payload_json
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        relation.relation_id,
+                        relation.source_entity_id,
+                        relation.target_entity_id,
+                        relation.predicate,
+                        json.dumps(relation.observation_ids, ensure_ascii=False),
+                        relation.confidence,
+                        json.dumps(relation.model_dump(mode="json"), ensure_ascii=False, sort_keys=True),
+                    ),
+                )
     def search_lexical(self, query: str, limit: int = 20) -> list[dict[str, Any]]:
         """Search exact terms and numbers, returning source-aware hits."""
         if limit < 1:
