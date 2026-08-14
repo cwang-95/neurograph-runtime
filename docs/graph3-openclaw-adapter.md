@@ -24,6 +24,17 @@ ID 通过 `scripts/graph3_feedback` 回写。需要读取 FSRS 弱先验时增�
 NEUROGRAPH_GRAPH3_FSRS=1
 ```
 
+如果 Graph 3.0 的语料已经建立 embedding，可继续通过环境变量启用语义路由；这些变量只透传到底层入口，不改变默认的词法+图检索：
+
+```bash
+NEUROGRAPH_GRAPH3_EMBEDDING_ENDPOINT=http://127.0.0.1:8000/v1/embeddings \\
+NEUROGRAPH_GRAPH3_EMBEDDING_MODEL=mlx-community/Qwen3-Embedding-0.6B-4bit-DWQ \\
+NEUROGRAPH_GRAPH3_ANN_INDEX=/path/to/graph3-ann \\
+NEUROGRAPH_GRAPH3_ANN_BACKEND=auto
+```
+
+只有设置 `NEUROGRAPH_GRAPH3_EMBEDDING_ENDPOINT` 时才会调用 embedding 服务；未设置或服务不可用时，Graph 3.0 保留词法、数值和图路径结果，不会让整个查询失败。
+
 如果调用方需要一个不调用 DeepSeek 的确定性回答草稿，可显式使用：
 
 ```bash
