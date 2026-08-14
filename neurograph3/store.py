@@ -131,6 +131,16 @@ class Graph3Store:
                 payload_json TEXT NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS zenbrain_nodes (
+                node_id TEXT PRIMARY KEY,
+                target_type TEXT NOT NULL,
+                target_id TEXT NOT NULL,
+                scheduler_json TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                UNIQUE(target_type, target_id)
+            );
+
             CREATE VIRTUAL TABLE IF NOT EXISTS observation_fts USING fts5(
                 observation_id UNINDEXED,
                 value,
@@ -209,7 +219,7 @@ class Graph3Store:
     def counts(self) -> dict[str, int]:
         return {
             table: int(self.connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])
-            for table in ("raw_assets", "source_elements", "observations", "claim_versions", "evidence_links", "entities", "relations", "observation_embeddings", "zenbrain_events")
+            for table in ("raw_assets", "source_elements", "observations", "claim_versions", "evidence_links", "entities", "relations", "observation_embeddings", "zenbrain_events", "zenbrain_nodes")
         }
 
     def record_zenbrain_event(
@@ -275,6 +285,44 @@ class Graph3Store:
             target_ids,
         ).fetchall()
         return [dict(row) for row in rows]
+
+    def get_zenbrain_scheduler(self, target_type: str, target_id: str) -> dict[str, Any] | None:
+        row = self.connection.execute(
+            "SELECT scheduler_json FROM zenbrain_nodes WHERE target_type = ? AND target_id = ?",
+            (target_type, target_id),
+        ).fetchone()
+        return json.loads(row["scheduler_json"]) if row else None
+
+    def put_zenbrain_scheduler(
+        self,
+        *,
+        target_type: str,
+        target_id: str,
+        scheduler: dict[str, Any],
+        created_at: datetime | None = None,
+    ) -> None:
+        now = datetime.now(timezone.utc).isoformat()
+        created = (created_at or datetime.now(timezone.utc)).isoformat()
+        node_id = stable_id("zenbrain_node", {"target_type": target_type, "target_id": target_id})
+        with self.connection:
+            self.connection.execute(
+                """
+                INSERT INTO zenbrain_nodes(
+                    node_id, target_type, target_id, scheduler_json, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(target_type, target_id) DO UPDATE SET
+                    scheduler_json=excluded.scheduler_json,
+                    updated_at=excluded.updated_at
+                """,
+                (
+                    node_id,
+                    target_type,
+                    target_id,
+                    json.dumps(scheduler, ensure_ascii=False, sort_keys=True),
+                    created,
+                    now,
+                ),
+            )
 
     def list_observations(self) -> list[dict[str, Any]]:
         rows = self.connection.execute(
