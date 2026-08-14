@@ -433,6 +433,44 @@ class Graph3Store:
                     ),
                 )
 
+    def claim_version_ids_for_observations(self, observation_ids: list[str]) -> dict[str, list[str]]:
+        """Return the claim versions explicitly linked to each observation."""
+        if not observation_ids:
+            return {}
+        placeholders = ",".join("?" for _ in observation_ids)
+        rows = self.connection.execute(
+            f"""
+            SELECT observation_id, claim_version_id
+            FROM evidence_links
+            WHERE observation_id IN ({placeholders})
+            ORDER BY observation_id, claim_version_id
+            """,
+            observation_ids,
+        ).fetchall()
+        result = {observation_id: [] for observation_id in observation_ids}
+        for row in rows:
+            result.setdefault(row["observation_id"], []).append(row["claim_version_id"])
+        return result
+
+    def observation_ids_for_claim_versions(self, claim_version_ids: list[str]) -> dict[str, list[str]]:
+        """Return source observations for selected claim versions."""
+        if not claim_version_ids:
+            return {}
+        placeholders = ",".join("?" for _ in claim_version_ids)
+        rows = self.connection.execute(
+            f"""
+            SELECT claim_version_id, observation_id
+            FROM evidence_links
+            WHERE claim_version_id IN ({placeholders})
+            ORDER BY claim_version_id, observation_id
+            """,
+            claim_version_ids,
+        ).fetchall()
+        result = {claim_version_id: [] for claim_version_id in claim_version_ids}
+        for row in rows:
+            result.setdefault(row["claim_version_id"], []).append(row["observation_id"])
+        return result
+
     def put_graph(self, entities: list[Entity], relations: list[Relation]) -> None:
         """Persist conservative entity/relation candidates idempotently."""
         with self.connection:
