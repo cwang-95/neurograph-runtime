@@ -1,6 +1,8 @@
 # NeuroGraph 3.0 技术设计
 
-状态：设计基线 v0.2（已完成首轮技术 review，尚未实施）
+状态：设计基线 v0.2（已完成首轮技术 review；Phase 0–3c 与证据覆盖基础已在 `feature/graph-3.0` 落地，尚未切换 OpenClaw 默认入口）
+
+当前实现边界：已具备 RawAsset/SourceElement/Observation、Claim/EvidenceLink、保守实体图、SQLite 权威元数据、多路 lexical/numeric/vector/graph 召回、EvidencePack 槽位覆盖与确定性追问。向量检索当前是可重建的 SQLite brute-force 基线，关系抽取仍是低置信度共现候选；ZenBrain、语义关系抽取和 ANN 索引尚未接入。
 
 ## 1. 目标、原则与边界
 

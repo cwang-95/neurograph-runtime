@@ -11,6 +11,14 @@ from pydantic import BaseModel, ConfigDict, Field
 from .store import Graph3Store
 
 
+_MECHANISM_MARKERS = (
+    "机制", "流程", "framework", "architecture", "component", "module",
+    "input", "output", "step", "network", "首先", "然后", "最后",
+)
+_COMPARISON_MARKERS = ("比较", "对比", "versus", "compared", "difference", "优于", "相比")
+_LIMITATION_MARKERS = ("限制", "局限", "不足", "limitation", "适用范围", "不适用")
+
+
 class SlotStatus(StrEnum):
     SUPPORTED = "supported"
     CONFLICTED = "conflicted"
@@ -25,6 +33,15 @@ class EvidenceSlot(BaseModel):
     name: str
     required: bool = True
     status: SlotStatus = SlotStatus.MISSING
+
+
+class FollowUpQuestion(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    question: str
+    reason: str
+    missing_slots: list[str] = Field(default_factory=list)
+    options: list[str] = Field(default_factory=list)
 
 
 class QueryPlan(BaseModel):
@@ -45,12 +62,20 @@ class QueryPlan(BaseModel):
             query_types.append("mechanism")
         if any(word in lowered for word in ("结果", "效果", "指标", "准确", "性能")):
             query_types.append("quantitative_result")
+        if any(word in lowered for word in ("比较", "对比", "区别", "优劣")):
+            query_types.append("comparison")
+        if any(word in lowered for word in ("限制", "局限", "不足", "适用范围")):
+            query_types.append("limitations")
         numeric_constraints = re.findall(r"\d+(?:\.\d+)?(?:\s*[a-zA-Z%]+)?", query)
         slots = [EvidenceSlot(name="direct_evidence")]
         if "mechanism" in query_types:
             slots.append(EvidenceSlot(name="mechanism"))
         if "quantitative_result" in query_types:
             slots.append(EvidenceSlot(name="quantitative_result"))
+        if "comparison" in query_types:
+            slots.append(EvidenceSlot(name="comparison"))
+        if "limitations" in query_types:
+            slots.append(EvidenceSlot(name="limitations"))
         return cls(
             query=query,
             query_types=query_types,
@@ -86,11 +111,14 @@ class EvidencePack(BaseModel):
     query: str
     query_plan: QueryPlan
     slot_status: dict[str, SlotStatus]
+    slot_evidence: dict[str, list[str]] = Field(default_factory=dict)
     evidence: list[EvidenceItem]
     graph_paths: list[dict[str, Any]] = Field(default_factory=list)
     conflicts: list[dict[str, Any]] = Field(default_factory=list)
     missing: list[str] = Field(default_factory=list)
     citations: list[dict[str, Any]] = Field(default_factory=list)
+    follow_up_required: bool = False
+    follow_up_questions: list[FollowUpQuestion] = Field(default_factory=list)
     retrieval_trace: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -126,6 +154,141 @@ class Graph3Retriever:
             )
             indexed += len(vectors)
         return indexed
+
+    @staticmethod
+    def _has_numeric_evidence(value: str, constraints: list[str]) -> bool:
+        normalized = " ".join(value.casefold().split())
+        if constraints:
+            return any(" ".join(item.casefold().split()) in normalized for item in constraints)
+        return bool(re.search(r"\d+(?:\.\d+)?\s*(?:ms|s|gy|cc|%|percent)", normalized))
+
+    @staticmethod
+    def _contains_any(value: str, markers: tuple[str, ...]) -> bool:
+        lowered = value.casefold()
+        return any(marker.casefold() in lowered for marker in markers)
+
+    @classmethod
+    def _matches_slot(cls, plan: QueryPlan, slot: EvidenceSlot, item: EvidenceItem) -> bool:
+        if slot.name == "direct_evidence":
+            return True
+        if slot.name == "mechanism":
+            return cls._contains_any(item.value, _MECHANISM_MARKERS)
+        if slot.name == "quantitative_result":
+            return item.matched_numbers > 0 or cls._has_numeric_evidence(item.value, plan.numeric_constraints)
+        if slot.name == "comparison":
+            return cls._contains_any(item.value, _COMPARISON_MARKERS)
+        if slot.name == "limitations":
+            return cls._contains_any(item.value, _LIMITATION_MARKERS)
+        return False
+
+    def _evaluate_slots(
+        self,
+        plan: QueryPlan,
+        evidence: list[EvidenceItem],
+    ) -> tuple[dict[str, SlotStatus], dict[str, list[str]]]:
+        statuses: dict[str, SlotStatus] = {}
+        slot_evidence: dict[str, list[str]] = {}
+        for slot in plan.evidence_slots:
+            matched = [item for item in evidence if self._matches_slot(plan, slot, item)]
+            ids = [item.observation_id for item in matched]
+            slot_evidence[slot.name] = ids
+            statuses[slot.name] = SlotStatus.SUPPORTED if ids else SlotStatus.MISSING
+        return statuses, slot_evidence
+
+    def _select_evidence(
+        self,
+        plan: QueryPlan,
+        candidates: dict[str, dict[str, Any]],
+        limit: int,
+    ) -> list[EvidenceItem]:
+        ordered = sorted(candidates.values(), key=lambda item: item["combined_score"], reverse=True)
+        selected = [EvidenceItem.model_validate(item) for item in ordered[:limit]]
+        if not selected:
+            return []
+
+        for slot in plan.evidence_slots:
+            if not slot.required or any(self._matches_slot(plan, slot, item) for item in selected):
+                continue
+            replacement = next(
+                (
+                    EvidenceItem.model_validate(item)
+                    for item in ordered[limit:]
+                    if self._matches_slot(plan, slot, EvidenceItem.model_validate(item))
+                ),
+                None,
+            )
+            if replacement is None:
+                continue
+            replace_index = min(range(len(selected)), key=lambda index: selected[index].combined_score)
+            selected[replace_index] = replacement
+        return sorted(selected, key=lambda item: item.combined_score, reverse=True)
+
+    @staticmethod
+    def _follow_up_questions(
+        plan: QueryPlan,
+        slot_status: dict[str, SlotStatus],
+        evidence: list[EvidenceItem],
+        options: list[str] | None = None,
+    ) -> list[FollowUpQuestion]:
+        missing = [
+            slot.name
+            for slot in plan.evidence_slots
+            if slot.required and slot_status.get(slot.name) in {SlotStatus.MISSING, SlotStatus.LOW_CONFIDENCE, SlotStatus.CONFLICTED}
+        ]
+        if not missing:
+            return []
+        labels = {
+            "direct_evidence": "直接证据",
+            "mechanism": "机制或流程",
+            "quantitative_result": "量化结果或指标",
+            "comparison": "比较对象与差异",
+            "limitations": "限制条件与适用范围",
+        }
+        missing_labels = [labels.get(name, name) for name in missing]
+        missing_text = "、".join(missing_labels)
+        if evidence:
+            question = f"我找到了相关材料，但还缺少{missing_text}。你希望优先确认哪一部分？"
+            reason = "当前证据与问题相关，但未覆盖所有必需证据槽位。"
+        else:
+            question = f"当前材料没有形成可核验的{missing_text}证据。请补充对象、范围或来源线索。"
+            reason = "当前召回结果不足以支撑问题，继续生成答案会有缺项风险。"
+        return [FollowUpQuestion(question=question, reason=reason, missing_slots=missing, options=options or [])]
+
+    def _ambiguity_question(
+        self,
+        query: str,
+        entity_ids: list[str],
+        evidence: list[EvidenceItem],
+    ) -> FollowUpQuestion | None:
+        if entity_ids or not evidence:
+            return None
+        lowered = query.casefold()
+        reference_markers = ("这个", "该", "它", "此方法", "这个方法", "the method", "it")
+        target_markers = ("方法", "机制", "结果", "效果", "性能", "怎么", "流程")
+        overview_markers = ("概览", "概述", "有哪些", "全貌", "综述", "整体")
+        if not any(marker in lowered for marker in reference_markers + target_markers):
+            return None
+
+        directions: list[str] = []
+        for entity in self.store.list_entities():
+            names = (entity["canonical_name"], *entity["aliases"])
+            if any(name.casefold() in item.value.casefold() for item in evidence for name in names):
+                directions.append(entity["canonical_name"])
+        directions = list(dict.fromkeys(directions))
+        if len(directions) < 2 and not any(marker in lowered for marker in reference_markers):
+            return None
+        if any(marker in lowered for marker in overview_markers):
+            return None
+
+        if directions:
+            options = directions[:5]
+            question = f"当前材料涉及多个方向（{'、'.join(options)}）。你希望具体查看哪一个？"
+            reason = "问题未指定实体，且候选证据来自多个可能改变答案的方向。"
+        else:
+            options = []
+            question = "你提到的对象还不明确。请补充具体方法、模型、设备或讲座主题。"
+            reason = "问题使用了指代词，但当前上下文无法唯一确定指代对象。"
+        return FollowUpQuestion(question=question, reason=reason, options=options)
 
     def retrieve(self, query: str, limit: int = 8) -> EvidencePack:
         plan = QueryPlan.from_query(query)
@@ -176,11 +339,13 @@ class Graph3Retriever:
                 + float(item.get("vector_score", 0.0) or 0.0)
                 + float(item.get("graph_score", 0.0) or 0.0) * 0.5
             )
-        hits = sorted(candidates.values(), key=lambda item: item["combined_score"], reverse=True)[:limit]
-        evidence = [EvidenceItem.model_validate(hit) for hit in hits]
-        direct_status = SlotStatus.SUPPORTED if evidence else SlotStatus.MISSING
-        slot_status = {slot.name: direct_status for slot in plan.evidence_slots}
+        evidence = self._select_evidence(plan, candidates, limit)
+        slot_status, slot_evidence = self._evaluate_slots(plan, evidence)
         missing = [name for name, status in slot_status.items() if status is SlotStatus.MISSING]
+        ambiguity_question = self._ambiguity_question(query, entity_ids, evidence)
+        follow_up_questions = self._follow_up_questions(plan, slot_status, evidence)
+        if ambiguity_question is not None:
+            follow_up_questions.insert(0, ambiguity_question)
         citations = [
             {
                 "observation_id": item.observation_id,
@@ -191,14 +356,25 @@ class Graph3Retriever:
             }
             for item in evidence
         ]
-        plan = plan.model_copy(update={"routes": trace["routes"]})
+        plan = plan.model_copy(
+            update={
+                "routes": trace["routes"],
+                "evidence_slots": [
+                    slot.model_copy(update={"status": slot_status[slot.name]})
+                    for slot in plan.evidence_slots
+                ],
+            }
+        )
         return EvidencePack(
             query=query,
             query_plan=plan,
             slot_status=slot_status,
+            slot_evidence=slot_evidence,
             evidence=evidence,
             graph_paths=graph_paths,
             missing=missing,
             citations=citations,
+            follow_up_required=bool(follow_up_questions),
+            follow_up_questions=follow_up_questions,
             retrieval_trace={**trace, "candidate_count": len(candidates), "entity_seed_count": len(entity_ids)},
         )
