@@ -320,6 +320,79 @@ class EvidenceLink(ContractModel):
         )
 
 
+class Entity(ContractModel):
+    entity_id: str
+    canonical_name: str
+    entity_type: str
+    aliases: tuple[str, ...] = ()
+    extraction_confidence: float = Field(ge=0.0, le=1.0)
+    source_scope: str = "document"
+
+    @classmethod
+    def new(
+        cls,
+        *,
+        canonical_name: str,
+        entity_type: str,
+        aliases: tuple[str, ...] = (),
+        extraction_confidence: float = 0.6,
+        source_scope: str = "document",
+    ) -> "Entity":
+        canonical = " ".join(canonical_name.split())
+        entity_id = stable_id(
+            "entity",
+            {"canonical_name": canonical.casefold(), "entity_type": entity_type.casefold()},
+        )
+        return cls(
+            entity_id=entity_id,
+            canonical_name=canonical,
+            entity_type=entity_type,
+            aliases=tuple(sorted(set(aliases))),
+            extraction_confidence=extraction_confidence,
+            source_scope=source_scope,
+        )
+
+
+class Relation(ContractModel):
+    relation_id: str
+    source_entity_id: str
+    target_entity_id: str
+    predicate: str
+    observation_ids: tuple[str, ...]
+    confidence: float = Field(ge=0.0, le=1.0)
+    extraction_method: str
+
+    @classmethod
+    def new(
+        cls,
+        *,
+        source_entity_id: str,
+        target_entity_id: str,
+        predicate: str,
+        observation_ids: tuple[str, ...],
+        confidence: float,
+        extraction_method: str,
+    ) -> "Relation":
+        canonical_observations = tuple(sorted(set(observation_ids)))
+        relation_id = stable_id(
+            "relation",
+            {
+                "source_entity_id": source_entity_id,
+                "target_entity_id": target_entity_id,
+                "predicate": predicate,
+            },
+        )
+        return cls(
+            relation_id=relation_id,
+            source_entity_id=source_entity_id,
+            target_entity_id=target_entity_id,
+            predicate=predicate,
+            observation_ids=canonical_observations,
+            confidence=confidence,
+            extraction_method=extraction_method,
+        )
+
+
 def contract_json(model: ContractModel) -> str:
     """Stable JSON representation for persistence and test fixtures."""
     return canonical_json(model.model_dump(mode="json"))
