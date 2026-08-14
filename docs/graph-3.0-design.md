@@ -2,7 +2,7 @@
 
 状态：设计基线 v0.2（已完成首轮技术 review；Phase 0–5 与证据覆盖基础已在 `feature/graph-3.0` 落地，尚未切换 OpenClaw 默认入口）
 
-当前实现边界：已具备 RawAsset/SourceElement/Observation、Claim/EvidenceLink、保守实体图、显式模式语义关系、多证据关系聚合、DeepSeek 结构化关系候选及严格审核、可控批量构建入口、受 hop/beam/关系白名单约束的多跳图扩展、ZenBrain 追加事件账本与弱先验、多路 lexical/numeric/vector/graph 召回、EvidencePack 槽位覆盖与确定性追问、现有 ZenBrain FSRS 调度器适配、Observation/ClaimVersion/Relation/Path 显式回答反馈接口。向量检索当前是可重建的 SQLite brute-force 基线，DeepSeek 只生成候选，不直接改变权威事实；边/路径/Claim 目前使用事件弱先验，尚未有独立 FSRS 状态，ANN 索引仍未接入。
+当前实现边界：已具备 RawAsset/SourceElement/Observation、Claim/EvidenceLink、保守实体图、显式模式语义关系、多证据关系聚合、DeepSeek 结构化关系候选及严格审核、可控批量构建入口、受 hop/beam/关系白名单约束的多跳图扩展、ZenBrain 追加事件账本与弱先验、多路 lexical/numeric/vector/graph 召回、EvidencePack 槽位覆盖与确定性追问、现有 ZenBrain FSRS 调度器适配、Observation/ClaimVersion/Relation/Path 显式回答反馈接口、ClaimVersion 抑制与冲突投影。向量检索当前是可重建的 SQLite brute-force 基线，DeepSeek 只生成候选，不直接改变权威事实；边/路径/Claim 目前使用事件弱先验，尚未有独立 FSRS 状态，ANN 索引仍未接入。
 
 ## 1. 目标、原则与边界
 
@@ -498,6 +498,10 @@ ledger.record_feedback(
 
 `record_feedback` 不是检索函数的一部分。若只调用 `retrieve()`，事件数和
 FSRS 节点状态都不增加；这条约束纳入回归测试。
+
+EvidencePack 的 `conflicts` 只报告同一逻辑 Claim 下仍未裁决的不同版本；
+若某一 ClaimVersion 已被明确纠正、拒绝或静态标为 superseded/rejected，
+该版本不会进入回答证据，但原始 Observation 仍保留在权威存储中供审计。
 
 ## 10. 存储与工程实现
 

@@ -471,6 +471,35 @@ class Graph3Store:
             result.setdefault(row["claim_version_id"], []).append(row["observation_id"])
         return result
 
+    def claim_versions(self, claim_version_ids: list[str]) -> dict[str, dict[str, Any]]:
+        """Return compact, answer-layer-safe ClaimVersion projections."""
+        if not claim_version_ids:
+            return {}
+        placeholders = ",".join("?" for _ in claim_version_ids)
+        rows = self.connection.execute(
+            f"""
+            SELECT claim_version_id, claim_id, subject, predicate,
+                   object_value_json, unit, status, payload_json
+            FROM claim_versions
+            WHERE claim_version_id IN ({placeholders})
+            ORDER BY claim_id, claim_version_id
+            """,
+            claim_version_ids,
+        ).fetchall()
+        return {
+            row["claim_version_id"]: {
+                "claim_version_id": row["claim_version_id"],
+                "claim_id": row["claim_id"],
+                "subject": row["subject"],
+                "predicate": row["predicate"],
+                "object_value": json.loads(row["object_value_json"]),
+                "unit": row["unit"],
+                "version": int(json.loads(row["payload_json"]).get("version", 1)),
+                "status": row["status"],
+            }
+            for row in rows
+        }
+
     def put_graph(self, entities: list[Entity], relations: list[Relation]) -> None:
         """Persist conservative entity/relation candidates idempotently."""
         with self.connection:
