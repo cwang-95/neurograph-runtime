@@ -7,11 +7,13 @@
 #   --memory:  查记忆域(memory_rag, 私有经历)
 #   --github:  只查 GitHub 项目数据集
 #   --all:     查文献+项目
-# 默认: --graph-evidence（图增强证据，由 OpenClaw/Codex 上层模型回答）
+# 默认知识域后端: Graph 3.0；回滚: NEUROGRAPH_BACKEND=cognee
+# 默认模式: --graph-evidence（图增强证据，由 OpenClaw/Codex 上层模型回答）
 # 输出: 精简 Top 结果, 便于 agent 直接读取并基于图谱作答
-# 后端: 默认 cognee；设置 NEUROGRAPH_BACKEND=graph3 时走 Graph 3.0（仅知识域）
+# 知识域后端: 默认 Graph 3.0；回滚: NEUROGRAPH_BACKEND=cognee
 # ============================================================
-cd ~/.openclaw/workspace/projects/neurograph/cognee-bridge
+SCRIPT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$SCRIPT_ROOT/cognee-bridge"
 export SSL_CERT_FILE=/etc/ssl/cert.pem CURL_CA_BUNDLE=/etc/ssl/cert.pem
 # TUN 模式已全局接管（2026-08-14 起），无需显式 1097 代理
 export NO_PROXY="us.i.posthog.com,api.posthog.com,127.0.0.1,localhost"
@@ -50,10 +52,19 @@ if [[ -z "$Q" ]]; then
   exit 1
 fi
 
-# Graph 3.0 is an explicit, reversible opt-in. The stable default remains Cognee.
-if [[ "${NEUROGRAPH_BACKEND:-cognee}" == "graph3" && "$DOMAIN" != "memory" ]]; then
-  GRAPH3_ROOT="${NEUROGRAPH_GRAPH3_ROOT:-/Users/wangcheng/Projects/neurograph-graph-3.0}"
-  GRAPH3_STORAGE="${NEUROGRAPH_GRAPH3_STORAGE:-$GRAPH3_ROOT/data/graph3}"
+# Graph 3.0 is the deployed knowledge-domain backend. The old Cognee path
+# remains the explicit rollback and continues to serve memory/project domains.
+if [[ "${NEUROGRAPH_BACKEND:-graph3}" == "graph3" && "$DOMAIN" == "knowledge" && "$DATASETS" == "wiki_full" ]]; then
+  GRAPH3_ROOT="${NEUROGRAPH_GRAPH3_ROOT:-$SCRIPT_ROOT}"
+  if [[ -n "${NEUROGRAPH_GRAPH3_STORAGE:-}" ]]; then
+    GRAPH3_STORAGE="$NEUROGRAPH_GRAPH3_STORAGE"
+  elif [[ -d "$GRAPH3_ROOT/data/graph3-openclaw-full" ]]; then
+    GRAPH3_STORAGE="$GRAPH3_ROOT/data/graph3-openclaw-full"
+  elif [[ -d "/Users/wangcheng/Projects/neurograph-graph-3.0/data/graph3-openclaw-full" ]]; then
+    GRAPH3_STORAGE="/Users/wangcheng/Projects/neurograph-graph-3.0/data/graph3-openclaw-full"
+  else
+    GRAPH3_STORAGE="$GRAPH3_ROOT/data/graph3-openclaw-full"
+  fi
   GRAPH3_PYTHON="${NEUROGRAPH_GRAPH3_PYTHON:-$GRAPH3_ROOT/.venv/bin/python}"
   if [[ ! -x "$GRAPH3_PYTHON" ]]; then
     GRAPH3_PYTHON="$HOME/.cognee-venv/bin/python"
@@ -84,6 +95,8 @@ if [[ "${NEUROGRAPH_BACKEND:-cognee}" == "graph3" && "$DOMAIN" != "memory" ]]; t
   fi
   if [[ -n "${NEUROGRAPH_GRAPH3_ANN_INDEX:-}" ]]; then
     GRAPH3_ARGS+=(--ann-index "$NEUROGRAPH_GRAPH3_ANN_INDEX")
+  elif [[ -d "$GRAPH3_STORAGE/vector_index" ]]; then
+    GRAPH3_ARGS+=(--ann-index "$GRAPH3_STORAGE/vector_index")
   fi
   if [[ -n "${NEUROGRAPH_GRAPH3_ANN_BACKEND:-}" ]]; then
     GRAPH3_ARGS+=(--ann-backend "$NEUROGRAPH_GRAPH3_ANN_BACKEND")
