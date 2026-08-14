@@ -6,9 +6,11 @@ import math
 import json
 import re
 import sqlite3
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from .ids import stable_id
 from .ingest import IngestResult
 from .models import ClaimVersion, Entity, EvidenceLink, Relation
 
@@ -116,6 +118,19 @@ class Graph3Store:
                 vector_json TEXT NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS zenbrain_events (
+                event_id TEXT PRIMARY KEY,
+                target_type TEXT NOT NULL,
+                target_id TEXT NOT NULL,
+                observation_id TEXT REFERENCES observations(observation_id),
+                event_type TEXT NOT NULL,
+                query TEXT,
+                caller TEXT,
+                path_id TEXT,
+                created_at TEXT NOT NULL,
+                payload_json TEXT NOT NULL
+            );
+
             CREATE VIRTUAL TABLE IF NOT EXISTS observation_fts USING fts5(
                 observation_id UNINDEXED,
                 value,
@@ -194,8 +209,72 @@ class Graph3Store:
     def counts(self) -> dict[str, int]:
         return {
             table: int(self.connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])
-            for table in ("raw_assets", "source_elements", "observations", "claim_versions", "evidence_links", "entities", "relations", "observation_embeddings")
+            for table in ("raw_assets", "source_elements", "observations", "claim_versions", "evidence_links", "entities", "relations", "observation_embeddings", "zenbrain_events")
         }
+
+    def record_zenbrain_event(
+        self,
+        *,
+        target_type: str,
+        target_id: str,
+        event_type: str,
+        observation_id: str | None = None,
+        query: str | None = None,
+        caller: str | None = None,
+        path_id: str | None = None,
+        created_at: datetime | None = None,
+        payload: dict[str, Any] | None = None,
+    ) -> str:
+        occurred_at = created_at or datetime.now(timezone.utc)
+        event_id = stable_id(
+            "zenbrain_event",
+            {
+                "target_type": target_type,
+                "target_id": target_id,
+                "event_type": event_type,
+                "query": query,
+                "caller": caller,
+                "path_id": path_id,
+                "created_at": occurred_at.isoformat(),
+            },
+        )
+        with self.connection:
+            self.connection.execute(
+                """
+                INSERT OR IGNORE INTO zenbrain_events(
+                    event_id, target_type, target_id, observation_id, event_type,
+                    query, caller, path_id, created_at, payload_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    event_id,
+                    target_type,
+                    target_id,
+                    observation_id,
+                    event_type,
+                    query,
+                    caller,
+                    path_id,
+                    occurred_at.isoformat(),
+                    json.dumps(payload or {}, ensure_ascii=False, sort_keys=True),
+                ),
+            )
+        return event_id
+
+    def zenbrain_event_history(self, target_ids: list[str]) -> list[dict[str, Any]]:
+        if not target_ids:
+            return []
+        placeholders = ",".join("?" for _ in target_ids)
+        rows = self.connection.execute(
+            f"""
+            SELECT target_id, event_type, created_at, query, caller, path_id
+            FROM zenbrain_events
+            WHERE target_type = 'observation' AND target_id IN ({placeholders})
+            ORDER BY created_at
+            """,
+            target_ids,
+        ).fetchall()
+        return [dict(row) for row in rows]
 
     def list_observations(self) -> list[dict[str, Any]]:
         rows = self.connection.execute(
