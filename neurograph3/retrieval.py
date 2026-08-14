@@ -442,7 +442,7 @@ class Graph3Retriever:
         plan = QueryPlan.from_query(query)
         candidates: dict[str, dict[str, Any]] = {}
         route_ranks: dict[str, dict[str, int]] = {}
-        route_weights = {"lexical": 1.0, "vector": 1.0, "graph": 0.8}
+        route_weights = {"lexical": 1.0, "numeric": 1.0, "vector": 1.0, "graph": 0.8}
         rrf_k = 60
         trace: dict[str, Any] = {
             "routes": ["lexical", "numeric", "entity", "graph"],
@@ -481,6 +481,24 @@ class Graph3Retriever:
         )
         for rank, hit in enumerate(lexical_hits, start=1):
             add_hit(hit, "lexical", rank=rank)
+
+        numeric_intent_markers = (
+            "时间", "耗时", "速度", "指标", "数值", "多少", "runtime", "latency",
+            "ms", "秒", "百分比", "percentage", "percent",
+        )
+        if "quantitative_result" in plan.query_types and any(
+            marker in query.casefold() for marker in numeric_intent_markers
+        ):
+            numeric_hits = [
+                hit
+                for hit in self.store.search_lexical(
+                    "ms percent gy cgy",
+                    limit=plan.max_candidates,
+                )
+                if self._has_numeric_evidence(hit["value"], plan.numeric_constraints)
+            ]
+            for rank, hit in enumerate(numeric_hits, start=1):
+                add_hit(hit, "numeric", rank=rank)
 
         entity_hits = self.store.search_entities(retrieval_query, limit=10)
         entity_ids = [item["entity_id"] for item in entity_hits]

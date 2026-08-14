@@ -320,6 +320,34 @@ Adaptive radiotherapy workflow uses online adaptation and treatment delivery.
                 ],
             )
 
+    def test_quantitative_query_promotes_unit_bearing_evidence_without_embedding(self):
+        source = """# Talk
+
+## Slide 1
+
+### PPT 视觉提取
+
+Adaptive radiotherapy workflow has real-time imaging and treatment delivery.
+
+## Slide 2
+
+### PPT 视觉提取
+
+End-to-end adaptation runtime is approximately 100 ms.
+"""
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            source_path = Path(temp_dir) / "talk.md"
+            source_path.write_text(source, encoding="utf-8")
+            result = ingest_markdown(source_path, storage_root=Path(temp_dir) / "assets", dataset="fixture")
+            with Graph3Store(Path(temp_dir) / "db") as store:
+                store.put_ingest_result(result)
+                pack = Graph3Retriever(store).retrieve("在线自适应放疗的时间成本", limit=3)
+
+            self.assertEqual(pack.slot_status["quantitative_result"], SlotStatus.SUPPORTED)
+            self.assertIn("100 ms", pack.evidence[0].value)
+            self.assertIn("numeric", pack.evidence[0].retrieval_routes)
+
 
 if __name__ == "__main__":
     unittest.main()
