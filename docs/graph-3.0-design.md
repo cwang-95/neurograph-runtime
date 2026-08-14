@@ -2,7 +2,7 @@
 
 状态：设计基线 v0.2（已完成首轮技术 review；Phase 0–5 与证据覆盖基础已在 `feature/graph-3.0` 落地，尚未切换 OpenClaw 默认入口）
 
-当前实现边界：已具备 RawAsset/SourceElement/Observation、Claim/EvidenceLink、保守实体图、显式模式语义关系、多证据关系聚合、DeepSeek 结构化关系候选及严格审核、可控批量构建入口、受 hop/beam/关系白名单约束的多跳图扩展、ZenBrain 追加事件账本与弱先验、多路 lexical/numeric/vector/graph 召回、EvidencePack 槽位覆盖与确定性追问、现有 ZenBrain FSRS 调度器适配、Observation/Relation/Path 显式回答反馈接口。向量检索当前是可重建的 SQLite brute-force 基线，DeepSeek 只生成候选，不直接改变权威事实；边/路径目前使用事件弱先验，尚未有独立 FSRS 状态，ANN 索引仍未接入。
+当前实现边界：已具备 RawAsset/SourceElement/Observation、Claim/EvidenceLink、保守实体图、显式模式语义关系、多证据关系聚合、DeepSeek 结构化关系候选及严格审核、可控批量构建入口、受 hop/beam/关系白名单约束的多跳图扩展、ZenBrain 追加事件账本与弱先验、多路 lexical/numeric/vector/graph 召回、EvidencePack 槽位覆盖与确定性追问、现有 ZenBrain FSRS 调度器适配、Observation/ClaimVersion/Relation/Path 显式回答反馈接口。向量检索当前是可重建的 SQLite brute-force 基线，DeepSeek 只生成候选，不直接改变权威事实；边/路径/Claim 目前使用事件弱先验，尚未有独立 FSRS 状态，ANN 索引仍未接入。
 
 ## 1. 目标、原则与边界
 
@@ -55,7 +55,8 @@ ZenBrain Event Ledger 横向记录检索、采用、引用、确认和纠错事�
 `@zensation/algorithms`，将观察节点的 FSRS 状态保存到 SQLite。检索只读
 `retrievability`，不会产生强化；`selected`、`cited`、`followed_up` 和
 `user_confirmed` 必须由回答层显式回写，才会更新 FSRS。`corrected` 与
-`rejected` 只影响事件先验，不触发 recall。
+`rejected` 只影响事件先验，不触发 recall。ClaimVersion、Relation 和 Path
+使用同一追加事件账本，但当前只参与弱先验，不与 Observation 共用 FSRS 状态。
 ```
 
 权威数据保存在结构化元数据与事件账本中。向量索引、BM25 索引、图投影、摘要和缓存都是可重建的派生视图。
@@ -463,6 +464,7 @@ rejected           被判无关或错误，不强化或降权
 ZenBrain 分别维护：
 
 - 节点状态：当前实现先维护 Observation 的 FSRS 可检索性，后续扩展到 Claim、Entity、TopicUnit；
+- 事实状态：ClaimVersion 已有独立事件先验，纠错默认只作用于选中的版本，不自动修改同一逻辑 Claim 的其他版本；
 - 边状态：当前已记录 Relation 的显式回答反馈弱先验，后续扩展为按问题类型的独立调度状态；
 - 路径状态：当前已记录稳定 Path ID 的显式回答反馈弱先验，后续扩展为路径级巩固状态；
 - 用户上下文：用户近期关注方向，但不改变事实可信度；
@@ -489,6 +491,10 @@ ledger.record_feedback(
     caller="answer-layer",
 )
 ```
+
+事实级反馈使用 `record_claim_feedback(claim_version_ids, event_type)`。
+若回答层明确确认来源证据也应同步强化，才传入
+`propagate_to_observations=True`；纠错和拒绝不会沿证据链接扩散。
 
 `record_feedback` 不是检索函数的一部分。若只调用 `retrieve()`，事件数和
 FSRS 节点状态都不增加；这条约束纳入回归测试。
@@ -563,6 +569,7 @@ FSRS 节点状态都不增加；这条约束纳入回归测试。
 - 接入现有 `@zensation/algorithms` FSRS，保存 Observation 节点状态；
 - 将可检索性作为弱先验，不改变事实相关性、证据质量和槽位覆盖判断；
 - 提供 `selected/cited/followed_up/user_confirmed/corrected/rejected` 的回答层显式事件接口，覆盖 Observation、Relation 和 Path；
+- 让 EvidencePack 返回关联 ClaimVersion，支持事实级确认、纠错和受控证据传播；
 - 验证检索不会隐式强化，反馈才会改变 FSRS 状态；
 - 后续再扩展边、路径和用户上下文的调度状态。
 

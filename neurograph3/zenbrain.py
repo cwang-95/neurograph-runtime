@@ -136,6 +136,28 @@ class ZenBrainEventLedger:
             payload=payload,
         )
 
+    def record_claim_event(
+        self,
+        claim_version_id: str,
+        event_type: ZenBrainEventType,
+        *,
+        query: str | None = None,
+        caller: str | None = None,
+        path_id: str | None = None,
+        created_at: datetime | None = None,
+        payload: dict[str, Any] | None = None,
+    ) -> str:
+        return self._record_target_event(
+            "claim",
+            claim_version_id,
+            event_type,
+            query=query,
+            caller=caller,
+            path_id=path_id,
+            created_at=created_at,
+            payload=payload,
+        )
+
     def record_path_event(
         self,
         path_id: str,
@@ -222,6 +244,59 @@ class ZenBrainEventLedger:
                 payload=payload,
             )
             count += 1
+        return count
+
+    def record_claim_feedback(
+        self,
+        claim_version_ids: Sequence[str],
+        event_type: ZenBrainEventType,
+        *,
+        query: str | None = None,
+        caller: str | None = None,
+        path_id: str | None = None,
+        payload: dict[str, Any] | None = None,
+        propagate_to_observations: bool = False,
+    ) -> int:
+        """Record fact-level feedback with conservative source propagation.
+
+        Corrections and rejections remain scoped to the selected ClaimVersion.
+        Positive feedback may propagate to its linked observations only when
+        the answer layer explicitly opts in.
+        """
+        count = 0
+        for claim_version_id in claim_version_ids:
+            self.record_claim_event(
+                claim_version_id,
+                event_type,
+                query=query,
+                caller=caller,
+                path_id=path_id,
+                payload=payload,
+            )
+            count += 1
+
+            if not propagate_to_observations or event_type not in {
+                ZenBrainEventType.SELECTED,
+                ZenBrainEventType.CITED,
+                ZenBrainEventType.FOLLOWED_UP,
+                ZenBrainEventType.USER_CONFIRMED,
+            }:
+                continue
+            observation_ids = self.store.observation_ids_for_claim_versions([claim_version_id]).get(
+                claim_version_id,
+                [],
+            )
+            count += self.record_feedback(
+                observation_ids,
+                event_type,
+                query=query,
+                caller=caller,
+                path_id=path_id,
+                payload={
+                    **(payload or {}),
+                    "propagated_from_claim_version_id": claim_version_id,
+                },
+            )
         return count
 
     def record_pack_graph_feedback(

@@ -107,6 +107,8 @@ class EvidenceItem(BaseModel):
     zenbrain_prior: float = 0.0
     zenbrain_edge_prior: float = 0.0
     zenbrain_path_prior: float = 0.0
+    claim_version_ids: list[str] = Field(default_factory=list)
+    zenbrain_claim_prior: float = 0.0
     combined_score: float = 0.0
     retrieval_routes: list[str] = Field(default_factory=list)
 
@@ -347,6 +349,8 @@ class Graph3Retriever:
         prior_scores: dict[str, float] = {}
         edge_prior_scores: dict[str, float] = {}
         path_prior_scores: dict[str, float] = {}
+        claim_prior_scores: dict[str, float] = {}
+        claim_ids_by_observation = self.store.claim_version_ids_for_observations(list(candidates))
         if self.zenbrain_prior is not None and candidates:
             try:
                 prior_scores = self.zenbrain_prior.score(list(candidates))
@@ -365,6 +369,15 @@ class Graph3Retriever:
                     edge_prior_scores = self.zenbrain_prior.score_targets(
                         "relation", list(dict.fromkeys(relation_ids))
                     )
+                claim_ids = list(
+                    dict.fromkeys(
+                        claim_id
+                        for ids in claim_ids_by_observation.values()
+                        for claim_id in ids
+                    )
+                )
+                if claim_ids:
+                    claim_prior_scores = self.zenbrain_prior.score_targets("claim", claim_ids)
                 for path in graph_paths:
                     path["zenbrain_path_prior"] = float(path_prior_scores.get(path.get("path_id"), 0.0))
                     path["zenbrain_edge_prior"] = max(
@@ -378,6 +391,8 @@ class Graph3Retriever:
                     trace["routes"].append("zenbrain_graph_prior")
                     trace["zenbrain_path_candidates"] = len(path_prior_scores)
                     trace["zenbrain_edge_candidates"] = len(edge_prior_scores)
+                if claim_ids:
+                    trace["zenbrain_claim_candidates"] = len(claim_prior_scores)
             except Exception as exc:  # keep evidence retrieval available
                 trace["zenbrain_prior_error"] = str(exc)
 
@@ -394,6 +409,11 @@ class Graph3Retriever:
                 (float(path.get("zenbrain_edge_prior", 0.0)) for path in relevant_paths),
                 default=0.0,
             )
+            item["claim_version_ids"] = claim_ids_by_observation.get(item["observation_id"], [])
+            item["zenbrain_claim_prior"] = max(
+                (float(claim_prior_scores.get(claim_id, 0.0)) for claim_id in item["claim_version_ids"]),
+                default=0.0,
+            )
             item["combined_score"] = (
                 float(item.get("lexical_score", 0.0))
                 + float(item.get("vector_score", 0.0) or 0.0)
@@ -401,6 +421,7 @@ class Graph3Retriever:
                 + item["zenbrain_prior"] * 0.1
                 + item["zenbrain_path_prior"] * 0.05
                 + item["zenbrain_edge_prior"] * 0.03
+                + item["zenbrain_claim_prior"] * 0.05
             )
         evidence = self._select_evidence(plan, candidates, limit)
         slot_status, slot_evidence = self._evaluate_slots(plan, evidence)
@@ -416,6 +437,7 @@ class Graph3Retriever:
                 "element_id": item.element_id,
                 "aligned_element_ids": item.aligned_element_ids,
                 "locator": item.locator,
+                "claim_version_ids": item.claim_version_ids,
             }
             for item in evidence
         ]
