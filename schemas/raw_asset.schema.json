@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://neurograph.local/schemas/raw_asset.schema.json",
+  "title": "RawAsset",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["asset_id", "content_hash", "media_type", "byte_size", "storage_uri"],
+  "properties": {
+    "asset_id": {"type": "string"},
+    "content_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "media_type": {"type": "string"},
+    "byte_size": {"type": "integer", "minimum": 0},
+    "source_uri": {"type": ["string", "null"]},
+    "storage_uri": {"type": "string"},
+    "acquired_at": {"type": ["string", "null"], "format": "date-time"},
+    "source_time": {"type": ["string", "null"], "format": "date-time"},
+    "document_version": {"type": ["string", "null"]},
+    "dataset": {"type": ["string", "null"]},
+    "license": {"type": ["string", "null"]}
+  }
+}
