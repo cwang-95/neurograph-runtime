@@ -4,11 +4,29 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from neurograph3.ingest import ingest_markdown
+from neurograph3.entities import extract_cooccurrence_relations, extract_entities
+from neurograph3.embedding import OpenAICompatibleEmbedder
 from neurograph3.retrieval import Graph3Retriever, SlotStatus
 from neurograph3.store import Graph3Store
 
 
 class Phase2RetrievalTests(unittest.TestCase):
+    def test_embedding_client_batches_large_requests(self):
+        class RecordingEmbedder(OpenAICompatibleEmbedder):
+            def __init__(self):
+                super().__init__(batch_size=2)
+                self.calls = []
+
+            def _embed_batch(self, texts):
+                self.calls.append(list(texts))
+                return [[float(index)] for index, _ in enumerate(texts)]
+
+        embedder = RecordingEmbedder()
+        vectors = embedder.embed(["one", "two", "three", "four", "five"])
+
+        self.assertEqual([len(call) for call in embedder.calls], [2, 2, 1])
+        self.assertEqual(len(vectors), 5)
+
     def test_store_is_idempotent_and_numeric_search_returns_citation(self):
         source = """# Talk\n\n## Slide 1\n\n### PPT 视觉提取\n\nGeoDose dose calculation runtime was 70.1 ms.\n"""
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -26,6 +44,69 @@ class Phase2RetrievalTests(unittest.TestCase):
             self.assertTrue(any("70.1 ms" in item.value for item in pack.evidence))
             self.assertTrue(pack.citations[0]["locator"]["slide"] == 1)
             self.assertFalse(pack.retrieval_trace["completion_model_called"])
+
+    def test_vector_and_graph_routes_are_merged(self):
+        source = """# Talk\n\n## Slide 1\n\n### PPT 视觉提取\n\nDREME provides anatomy to GeoDose.\n"""
+
+        class FakeEmbedder:
+            model = "fake-embedding-v1"
+
+            def embed(self, texts):
+                return [[1.0, 0.0] if "GeoDose" in text else [0.0, 1.0] for text in texts]
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            source_path = Path(temp_dir) / "talk.md"
+            source_path.write_text(source, encoding="utf-8")
+            result = ingest_markdown(source_path, storage_root=Path(temp_dir) / "assets", dataset="fixture")
+            observation = result.observations[0]
+            entities = extract_entities(observation)
+            relations = extract_cooccurrence_relations(observation, entities)
+            with Graph3Store(Path(temp_dir) / "db") as store:
+                store.put_ingest_result(result)
+                store.put_graph(entities, relations)
+                retriever = Graph3Retriever(store, embedder=FakeEmbedder())
+                self.assertEqual(retriever.index_vectors(), len(result.observations))
+                pack = retriever.retrieve("GeoDose", limit=5)
+
+            self.assertIn("vector", pack.retrieval_trace["routes"])
+            self.assertTrue(pack.evidence)
+            self.assertTrue(any("vector" in item.retrieval_routes for item in pack.evidence))
+            self.assertTrue(pack.graph_paths)
+
+    def test_vector_index_falls_back_to_single_items_after_batch_failure(self):
+        source = """# Talk
+
+## Slide 1
+
+### PPT 视觉提取
+
+GeoDose dose calculation runtime was 70.1 ms.
+
+## Slide 2
+
+### PPT 视觉提取
+
+DREME supports adaptive radiotherapy.
+"""
+
+        class BatchFailingEmbedder:
+            model = "batch-failing-fake-v1"
+            batch_size = 2
+
+            def embed(self, texts):
+                if len(texts) > 1:
+                    raise RuntimeError("fake batch failure")
+                return [[1.0, 0.0]]
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            source_path = Path(temp_dir) / "talk.md"
+            source_path.write_text(source, encoding="utf-8")
+            result = ingest_markdown(source_path, storage_root=Path(temp_dir) / "assets", dataset="fixture")
+            with Graph3Store(Path(temp_dir) / "db") as store:
+                store.put_ingest_result(result)
+                retriever = Graph3Retriever(store, embedder=BatchFailingEmbedder())
+                self.assertEqual(retriever.index_vectors(), len(result.observations))
+                self.assertEqual(store.counts()["observation_embeddings"], len(result.observations))
 
 
 if __name__ == "__main__":
