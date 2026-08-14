@@ -645,6 +645,8 @@ scripts/graph3_eval \
   --storage-root data/graph3 \
   --gold-file evaluation/aapm-smoke-gold.json \
   --corpus-label aapm_smoke \
+  --corpus-file /path/to/best-in-physics-therapy-intelligent-in-treatment-planning-framework-for-real-time-adaptive-radiotherapy-art.md \
+  --isolated-storage \
   --report data/graph3-evaluation.json
 ```
 
@@ -656,19 +658,31 @@ Gold case 可声明 `expected_terms`、`expected_observation_ids`、必需
 2.0 baseline 只读采集入口：
 
 ```bash
+# 先在独立 Cognee 根目录中灌入并建图，避免 wiki_full 等已有语料污染基线
+DATA_ROOT_DIRECTORY=/tmp/cognee-aapm/data \
+SYSTEM_ROOT_DIRECTORY=/tmp/cognee-aapm/system \
+~/.cognee-venv/bin/python cognee-bridge/feed_wiki.py aapm_smoke \
+  --dir /path/to/aapm-input
+
 scripts/cognee_eval \
   --gold-file evaluation/aapm-smoke-gold.json \
   --workdir /Users/wangcheng/.openclaw/workspace/projects/neurograph/cognee-bridge \
   --python /Users/wangcheng/.cognee-venv/bin/python \
-  --dataset wiki_full --corpus-label cognee_wiki_full \
+  --dataset aapm_smoke --corpus-label aapm_smoke \
+  --corpus-file /path/to/best-in-physics-therapy-intelligent-in-treatment-planning-framework-for-real-time-adaptive-radiotherapy-art.md \
+  --data-root /tmp/cognee-aapm/data --system-root /tmp/cognee-aapm/system \
+  --isolated-storage \
   --report /tmp/cognee-baseline.json
 
 scripts/graph3_ab_compare \
   --graph3-report /tmp/graph3-evaluation.json \
-  --baseline-report /tmp/cognee-baseline.json
+  --baseline-report /tmp/cognee-baseline.json \
+  --corpus-match
 ```
 
-只有两边 `corpus_label` 相同，A/B 结果才可解释。Cognee 2.0 当前 graph-evidence
+只有两边 `corpus_label`、源文件 SHA-256 指纹相同，且两边都明确标记为独立存储，A/B
+结果才可解释。仅使用相同数据集名不够，因为 Cognee 的默认图数据库可能包含其他
+数据集。Cognee 2.0 当前 graph-evidence
 输出没有稳定 Observation/Citation ID，也没有 EvidenceSlot 状态，评测报告会把
 这些指标标为 unsupported，不会用文本猜测替代。语料标签不匹配时，比较器只展示
 两边原始指标，不输出性能差值；如需强制校验同语料，可追加 `--corpus-match`。

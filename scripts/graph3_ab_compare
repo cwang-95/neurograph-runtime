@@ -18,20 +18,22 @@ def main() -> int:
     baseline = json.loads(args.baseline_report.read_text(encoding="utf-8"))
     graph3_corpus = graph3.get("corpus_label")
     baseline_corpus = baseline.get("corpus_label")
-    comparable = bool(
-        graph3_corpus
-        and baseline_corpus
-        and graph3_corpus != "unspecified"
-        and baseline_corpus != "unspecified"
-        and graph3_corpus == baseline_corpus
-    )
+    reasons = []
+    if not graph3_corpus or graph3_corpus == "unspecified" or graph3_corpus != baseline_corpus:
+        reasons.append("corpus labels do not match")
+    if not graph3.get("corpus_fingerprint") or graph3.get("corpus_fingerprint") != baseline.get("corpus_fingerprint"):
+        reasons.append("corpus fingerprints do not match")
+    if not graph3.get("isolated_storage") or not baseline.get("isolated_storage"):
+        reasons.append("one or both reports are not marked as isolated")
+    comparable = not reasons
     if args.corpus_match and not comparable:
-        print(json.dumps({"error": "corpus labels do not match"}, ensure_ascii=False))
+        print(json.dumps({"error": "reports are not comparable", "reasons": reasons}, ensure_ascii=False))
         return 2
     report = {
         "comparable": comparable,
         "corpus_match_asserted": args.corpus_match,
         "corpus_labels": {"graph3": graph3_corpus, "baseline": baseline_corpus},
+        "comparability_reasons": reasons,
         "graph3": {
             "pass_rate": graph3.get("pass_rate"),
             "mean_latency_ms": graph3.get("mean_latency_ms"),
