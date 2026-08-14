@@ -101,6 +101,46 @@ DREME provides real-time anatomy to GeoDose.
             self.assertEqual(counts["relations"], 1)
             self.assertEqual(len(paths[0]["observation_ids"]), 2)
 
+    def test_multi_hop_beam_search_returns_full_typed_path(self):
+        source = """# Talk
+
+## Slide 1
+
+### PPT 视觉提取
+
+DREME provides anatomy to GeoDose.
+
+## Slide 2
+
+### PPT 视觉提取
+
+GeoDose uses TransFM for adaptive planning.
+"""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            source_path = Path(temp_dir) / "talk.md"
+            source_path.write_text(source, encoding="utf-8")
+            result = ingest_markdown(source_path, storage_root=Path(temp_dir) / "assets", dataset="fixture")
+            all_entities = {}
+            relations = []
+            for observation in result.observations:
+                extracted = extract_entities(observation)
+                all_entities.update({item.entity_id: item for item in extracted})
+                relations.extend(extract_semantic_relations(observation, extracted))
+
+            dreme_id = next(item.entity_id for item in all_entities.values() if item.canonical_name == "DREME")
+            with Graph3Store(Path(temp_dir) / "db") as store:
+                store.put_ingest_result(result)
+                store.put_graph(list(all_entities.values()), relations)
+                paths, _ = store.expand_graph([dreme_id], max_hops=2, beam_width=10)
+
+            two_hop = next(path for path in paths if path["hop"] == 2 and path["end_name"] == "TransFM")
+            self.assertEqual(len(two_hop["path_edges"]), 2)
+            self.assertEqual(
+                [edge["predicate"] for edge in two_hop["path_edges"]],
+                ["provides_input_to", "uses"],
+            )
+            self.assertEqual(len(two_hop["observation_ids"]), 2)
+
 
 if __name__ == "__main__":
     unittest.main()

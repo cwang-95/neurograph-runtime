@@ -442,6 +442,7 @@ class Graph3Store:
         entity_ids: list[str],
         *,
         max_hops: int = 1,
+        beam_width: int = 20,
         allowed_predicates: tuple[str, ...] = (
             "provides_input_to",
             "takes_input_from",
@@ -452,52 +453,127 @@ class Graph3Store:
             "co_occurs_in_observation",
         ),
     ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-        """Expand only typed edges and return paths plus observation hits."""
-        if max_hops < 1 or not entity_ids:
+        """Expand typed edges with bounded multi-hop beam search."""
+        if max_hops < 1 or beam_width < 1 or not entity_ids:
             return [], []
         allowed = set(allowed_predicates)
-        frontier = set(entity_ids)
-        visited = set(frontier)
+        rows = self.connection.execute(
+            """
+            SELECT r.*, se.canonical_name AS source_name, te.canonical_name AS target_name
+            FROM relations r
+            JOIN entities se ON se.entity_id = r.source_entity_id
+            JOIN entities te ON te.entity_id = r.target_entity_id
+            """
+        ).fetchall()
+        adjacency: dict[str, list[dict[str, Any]]] = {}
+        for row in rows:
+            if row["predicate"] not in allowed:
+                continue
+            edge = {
+                "source_entity_id": row["source_entity_id"],
+                "source_name": row["source_name"],
+                "target_entity_id": row["target_entity_id"],
+                "target_name": row["target_name"],
+                "predicate": row["predicate"],
+                "observation_ids": json.loads(row["observation_ids_json"]),
+                "confidence": float(row["confidence"]),
+                "extraction_method": json.loads(row["payload_json"]).get("extraction_method"),
+            }
+            adjacency.setdefault(edge["source_entity_id"], []).append(
+                {**edge, "next_entity_id": edge["target_entity_id"], "traversal_direction": "outbound"}
+            )
+            adjacency.setdefault(edge["target_entity_id"], []).append(
+                {**edge, "next_entity_id": edge["source_entity_id"], "traversal_direction": "inbound"}
+            )
+
+        entity_rows = self.connection.execute(
+            "SELECT entity_id, canonical_name FROM entities"
+        ).fetchall()
+        entity_names = {row["entity_id"]: row["canonical_name"] for row in entity_rows}
+        frontier = [
+            {
+                "seed_entity_id": entity_id,
+                "current_entity_id": entity_id,
+                "nodes": (entity_id,),
+                "edges": (),
+                "observation_ids": (),
+                "score": 1.0,
+            }
+            for entity_id in dict.fromkeys(entity_ids)
+            if entity_id in entity_names
+        ]
         paths: list[dict[str, Any]] = []
         observation_ids: set[str] = set()
         for hop in range(1, max_hops + 1):
-            rows = self.connection.execute(
-                """
-                SELECT r.*, se.canonical_name AS source_name, te.canonical_name AS target_name
-                FROM relations r
-                JOIN entities se ON se.entity_id = r.source_entity_id
-                JOIN entities te ON te.entity_id = r.target_entity_id
-                """
-            ).fetchall()
-            next_frontier: set[str] = set()
-            for row in rows:
-                if row["predicate"] not in allowed:
+            candidates: list[dict[str, Any]] = []
+            for state in frontier:
+                neighbors = adjacency.get(state["current_entity_id"], [])
+                degree_penalty = 1.0 / max(1.0, (len(neighbors) ** 0.5))
+                for edge in neighbors:
+                    next_entity_id = edge["next_entity_id"]
+                    if next_entity_id in state["nodes"]:
+                        continue
+                    edge_score = edge["confidence"] * degree_penalty * (0.85 ** (hop - 1))
+                    next_observation_ids = tuple(
+                        sorted(set(state["observation_ids"]) | set(edge["observation_ids"]))
+                    )
+                    candidates.append(
+                        {
+                            "seed_entity_id": state["seed_entity_id"],
+                            "current_entity_id": next_entity_id,
+                            "nodes": (*state["nodes"], next_entity_id),
+                            "edges": (*state["edges"], edge),
+                            "observation_ids": next_observation_ids,
+                            "score": state["score"] * edge_score,
+                        }
+                    )
+            candidates.sort(key=lambda state: state["score"], reverse=True)
+            next_frontier: list[dict[str, Any]] = []
+            seen_states: set[tuple[str, str, tuple[str, ...]]] = set()
+            for state in candidates:
+                state_key = (state["seed_entity_id"], state["current_entity_id"], state["nodes"])
+                if state_key in seen_states:
                     continue
-                source_id, target_id = row["source_entity_id"], row["target_entity_id"]
-                if source_id not in frontier and target_id not in frontier:
-                    continue
-                other_id = target_id if source_id in frontier else source_id
-                if other_id in visited and other_id not in frontier:
-                    continue
-                ids = json.loads(row["observation_ids_json"])
-                observation_ids.update(ids)
+                seen_states.add(state_key)
+                next_frontier.append(state)
+                observation_ids.update(state["observation_ids"])
+                last_edge = state["edges"][-1]
                 paths.append(
                     {
                         "hop": hop,
-                        "source_entity_id": source_id,
-                        "source_name": row["source_name"],
-                        "predicate": row["predicate"],
-                        "target_entity_id": target_id,
-                        "target_name": row["target_name"],
-                        "observation_ids": ids,
-                        "confidence": row["confidence"],
-                        "extraction_method": json.loads(row["payload_json"]).get("extraction_method"),
+                        "seed_entity_id": state["seed_entity_id"],
+                        "seed_name": entity_names[state["seed_entity_id"]],
+                        "source_entity_id": last_edge["source_entity_id"],
+                        "source_name": last_edge["source_name"],
+                        "predicate": last_edge["predicate"],
+                        "target_entity_id": last_edge["target_entity_id"],
+                        "target_name": last_edge["target_name"],
+                        "end_entity_id": state["current_entity_id"],
+                        "end_name": entity_names[state["current_entity_id"]],
+                        "observation_ids": list(state["observation_ids"]),
+                        "confidence": state["score"],
+                        "path_score": state["score"],
+                        "extraction_method": last_edge["extraction_method"],
+                        "path_edges": [
+                            {
+                                "source_entity_id": edge["source_entity_id"],
+                                "source_name": edge["source_name"],
+                                "predicate": edge["predicate"],
+                                "target_entity_id": edge["target_entity_id"],
+                                "target_name": edge["target_name"],
+                                "observation_ids": edge["observation_ids"],
+                                "confidence": edge["confidence"],
+                                "extraction_method": edge["extraction_method"],
+                                "traversal_direction": edge["traversal_direction"],
+                            }
+                            for edge in state["edges"]
+                        ],
                     }
                 )
-                next_frontier.add(other_id)
+                if len(next_frontier) >= beam_width:
+                    break
             if not next_frontier:
                 break
-            visited.update(next_frontier)
             frontier = next_frontier
         return paths, self.observation_hits(sorted(observation_ids))
 
