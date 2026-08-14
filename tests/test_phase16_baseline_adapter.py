@@ -17,6 +17,10 @@ def load_script(name: str):
 
 
 class Phase16BaselineAdapterTests(unittest.TestCase):
+    def test_small_sample_p95_uses_nearest_rank_max(self):
+        self.assertEqual(load_script("graph3_eval")._p95_latency([1.0, 2.0, 100.0]), 100.0)
+        self.assertEqual(load_script("cognee_eval")._p95_latency([1.0, 2.0, 100.0]), 100.0)
+
     def test_cognee_adapter_parses_pretty_json_after_logs(self):
         adapter = load_script("cognee_eval")
         payload = {"mode": "graph-evidence", "query": "q", "graph_context": ["70.1 ms"]}
