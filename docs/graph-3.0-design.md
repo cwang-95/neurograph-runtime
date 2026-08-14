@@ -1,6 +1,6 @@
 # NeuroGraph 3.0 技术设计
 
-状态：设计基线 v0.3（已完成首轮技术 review；Phase 0–5 与证据覆盖基础已在 `feature/graph-3.0` 落地，已完成全量 AAPM 灰度前置验证，尚未切换 OpenClaw 默认入口）
+状态：设计基线 v0.4（已完成首轮技术 review；Phase 0–5 与证据覆盖基础已在 `feature/graph-3.0` 落地，已完成全量 AAPM 语义检索灰度验证，尚未切换 OpenClaw 默认入口）
 
 当前实现边界：已具备 RawAsset/SourceElement/Observation、Claim/EvidenceLink、保守实体图、显式模式语义关系、多证据关系聚合、DeepSeek 结构化关系候选及严格审核、可控批量构建入口、受 hop/beam/关系白名单约束的多跳图扩展、ZenBrain 追加事件账本与弱先验、多路 lexical/numeric/vector/graph 召回、可解释 RRF 路线融合、EvidencePack 槽位覆盖与确定性追问、现有 ZenBrain FSRS 调度器适配、Observation/ClaimVersion/Relation/Path 显式回答反馈接口、ClaimVersion 抑制与冲突投影、Codex/OpenClaw 通用反馈协议与 CLI。向量检索默认是可重建的 SQLite brute-force 基线，也已接入可选 HNSW/FAISS 派生索引及自动回退；DeepSeek 只生成候选，不直接改变权威事实；边/路径/Claim 目前使用事件弱先验，尚未有独立 FSRS 状态。
 
@@ -10,7 +10,9 @@
 - 当前开发副本默认 `data/graph3` 仍是单份材料的小库，且没有 Observation embedding，不能代表全量知识库；因此没有切换 OpenClaw 默认入口。
 - 真实查询结果：英文 `online adaptive radiotherapy workflow` 返回 6 条可引用直接证据；混合查询 `GeoDose 机制 结果 runtime` 同时返回机制与量化结果，包含 1.5 ms、70.1 ms、30.6 ms 和约 100 ms 的原始证据。
 - 纯中文 `自适应放疗的实时计划流程` 在没有 embedding 的隔离库中按设计追问，说明当前缺口是中文语义召回而不是回答层重复调用模型；加入英文核心实体后可命中同一批跨页证据。
-- 本机 `127.0.0.1:8000` 当前只加载视觉模型；`/v1/embeddings` 返回 `no_embedding_model`。因此下一步必须先启动并验证 embedding 服务，再补建向量和 ANN 索引，随后才具备默认切换条件。
+- 本次灰度已通过 Rapid-MLX 模型管理器按需加载 Qwen3-Embedding-0.6B；1,900 条 Observation 全部生成 1024 维向量，并成功构建 1,900 条 HNSW 索引。验证完成后已恢复 `qwen3-vl-8b-4bit`，没有改变 OpenClaw 当前视觉模型状态。
+- 纯中文 `自适应放疗的实时计划流程` 已从无向量时的 `follow_up` 变为 `answer`，返回直接证据与机制证据；Graph3 query trace 实际包含 lexical、numeric、entity、graph、vector、ZenBrain 路线，GeoDose 查询额外产生 5 条图路径。
+- OpenClaw adapter 已支持 Graph3 运行时选择：优先使用 Graph 3.0 `.venv` 以启用 HNSW，不存在时回退旧 cognee 环境；语义端点、模型、ANN 路径均由环境变量控制。默认入口仍保持 Cognee，下一步是基于更大领域语料做 A/B 与切换门槛评测。
 
 ## 1. 目标、原则与边界
 
