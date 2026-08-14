@@ -53,6 +53,8 @@ class QueryPlan(BaseModel):
     evidence_slots: list[EvidenceSlot]
     routes: list[str]
     max_candidates: int = Field(default=20, ge=1)
+    max_hops: int = Field(default=1, ge=1, le=3)
+    beam_width: int = Field(default=20, ge=1, le=100)
 
     @classmethod
     def from_query(cls, query: str) -> "QueryPlan":
@@ -82,6 +84,7 @@ class QueryPlan(BaseModel):
             numeric_constraints=numeric_constraints,
             evidence_slots=slots,
             routes=["lexical", "numeric"],
+            max_hops=1 if query_types == ["exact_fact"] else 2,
         )
 
 
@@ -314,7 +317,11 @@ class Graph3Retriever:
 
         entity_hits = self.store.search_entities(query, limit=10)
         entity_ids = [item["entity_id"] for item in entity_hits]
-        graph_paths, graph_hits = self.store.expand_graph(entity_ids, max_hops=1)
+        graph_paths, graph_hits = self.store.expand_graph(
+            entity_ids,
+            max_hops=plan.max_hops,
+            beam_width=plan.beam_width,
+        )
         for hit in graph_hits:
             path_score = max(
                 (path["confidence"] for path in graph_paths if hit["observation_id"] in path["observation_ids"]),
@@ -376,5 +383,12 @@ class Graph3Retriever:
             citations=citations,
             follow_up_required=bool(follow_up_questions),
             follow_up_questions=follow_up_questions,
-            retrieval_trace={**trace, "candidate_count": len(candidates), "entity_seed_count": len(entity_ids)},
+            retrieval_trace={
+                **trace,
+                "candidate_count": len(candidates),
+                "entity_seed_count": len(entity_ids),
+                "graph_path_count": len(graph_paths),
+                "graph_max_hops": plan.max_hops,
+                "graph_beam_width": plan.beam_width,
+            },
         )
