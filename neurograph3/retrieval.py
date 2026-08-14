@@ -108,6 +108,8 @@ class EvidenceItem(BaseModel):
     zenbrain_edge_prior: float = 0.0
     zenbrain_path_prior: float = 0.0
     claim_version_ids: list[str] = Field(default_factory=list)
+    suppressed_claim_version_ids: list[str] = Field(default_factory=list)
+    claim_conflict_ids: list[str] = Field(default_factory=list)
     zenbrain_claim_prior: float = 0.0
     combined_score: float = 0.0
     retrieval_routes: list[str] = Field(default_factory=list)
@@ -351,6 +353,25 @@ class Graph3Retriever:
         path_prior_scores: dict[str, float] = {}
         claim_prior_scores: dict[str, float] = {}
         claim_ids_by_observation = self.store.claim_version_ids_for_observations(list(candidates))
+        claim_ids = list(
+            dict.fromkeys(
+                claim_id
+                for ids in claim_ids_by_observation.values()
+                for claim_id in ids
+            )
+        )
+        claim_records = self.store.claim_versions(claim_ids)
+        if self.zenbrain_prior is not None and hasattr(self.zenbrain_prior, "project_claims"):
+            claim_projection = self.zenbrain_prior.project_claims(claim_ids)
+        else:
+            claim_projection = {
+                claim_id: {
+                    **record,
+                    "suppressed": record["status"] in {"rejected", "superseded"},
+                    "reason": f"static_{record['status']}" if record["status"] in {"rejected", "superseded"} else None,
+                }
+                for claim_id, record in claim_records.items()
+            }
         if self.zenbrain_prior is not None and candidates:
             try:
                 prior_scores = self.zenbrain_prior.score(list(candidates))
@@ -369,13 +390,6 @@ class Graph3Retriever:
                     edge_prior_scores = self.zenbrain_prior.score_targets(
                         "relation", list(dict.fromkeys(relation_ids))
                     )
-                claim_ids = list(
-                    dict.fromkeys(
-                        claim_id
-                        for ids in claim_ids_by_observation.values()
-                        for claim_id in ids
-                    )
-                )
                 if claim_ids:
                     claim_prior_scores = self.zenbrain_prior.score_targets("claim", claim_ids)
                 for path in graph_paths:
@@ -396,7 +410,17 @@ class Graph3Retriever:
             except Exception as exc:  # keep evidence retrieval available
                 trace["zenbrain_prior_error"] = str(exc)
 
+        visible_candidates: dict[str, dict[str, Any]] = {}
+        suppressed_claim_count = 0
         for item in candidates.values():
+            linked_claim_ids = claim_ids_by_observation.get(item["observation_id"], [])
+            suppressed_claim_ids = [
+                claim_id for claim_id in linked_claim_ids if claim_projection.get(claim_id, {}).get("suppressed")
+            ]
+            suppressed_claim_count += len(suppressed_claim_ids)
+            visible_claim_ids = [claim_id for claim_id in linked_claim_ids if claim_id not in suppressed_claim_ids]
+            if linked_claim_ids and not visible_claim_ids:
+                continue
             item["zenbrain_prior"] = max(-1.0, min(1.0, float(prior_scores.get(item["observation_id"], 0.0))))
             relevant_paths = [
                 path for path in graph_paths if item["observation_id"] in path.get("observation_ids", [])
@@ -409,11 +433,13 @@ class Graph3Retriever:
                 (float(path.get("zenbrain_edge_prior", 0.0)) for path in relevant_paths),
                 default=0.0,
             )
-            item["claim_version_ids"] = claim_ids_by_observation.get(item["observation_id"], [])
+            item["claim_version_ids"] = visible_claim_ids
+            item["suppressed_claim_version_ids"] = suppressed_claim_ids
             item["zenbrain_claim_prior"] = max(
-                (float(claim_prior_scores.get(claim_id, 0.0)) for claim_id in item["claim_version_ids"]),
+                (float(claim_prior_scores.get(claim_id, 0.0)) for claim_id in visible_claim_ids),
                 default=0.0,
             )
+            item["claim_conflict_ids"] = []
             item["combined_score"] = (
                 float(item.get("lexical_score", 0.0))
                 + float(item.get("vector_score", 0.0) or 0.0)
@@ -423,7 +449,43 @@ class Graph3Retriever:
                 + item["zenbrain_edge_prior"] * 0.03
                 + item["zenbrain_claim_prior"] * 0.05
             )
+            visible_candidates[item["observation_id"]] = item
+        candidates = visible_candidates
         evidence = self._select_evidence(plan, candidates, limit)
+        conflict_versions: dict[str, list[dict[str, Any]]] = {}
+        for item in evidence:
+            for claim_version_id in item.claim_version_ids:
+                record = claim_projection.get(claim_version_id)
+                if record and record.get("claim_id"):
+                    conflict_versions.setdefault(record["claim_id"], []).append(record)
+        conflicts = []
+        for claim_id, versions in conflict_versions.items():
+            unique_values = {
+                (repr(version.get("object_value")), version.get("unit"))
+                for version in versions
+            }
+            if len(unique_values) > 1:
+                conflicts.append(
+                    {
+                        "claim_id": claim_id,
+                        "claim_version_ids": [version["claim_version_id"] for version in versions],
+                        "values": [
+                            {"object_value": version.get("object_value"), "unit": version.get("unit")}
+                            for version in versions
+                        ],
+                        "status": "conflicted",
+                    }
+                )
+        conflict_ids = {conflict["claim_id"] for conflict in conflicts}
+        for item in evidence:
+            item.claim_conflict_ids = sorted(
+                {
+                    claim_projection[claim_version_id]["claim_id"]
+                    for claim_version_id in item.claim_version_ids
+                    if claim_version_id in claim_projection
+                    and claim_projection[claim_version_id].get("claim_id") in conflict_ids
+                }
+            )
         slot_status, slot_evidence = self._evaluate_slots(plan, evidence)
         missing = [name for name, status in slot_status.items() if status is SlotStatus.MISSING]
         ambiguity_question = self._ambiguity_question(query, entity_ids, evidence)
@@ -468,5 +530,8 @@ class Graph3Retriever:
                 "graph_path_count": len(graph_paths),
                 "graph_max_hops": plan.max_hops,
                 "graph_beam_width": plan.beam_width,
+                "claim_suppressed_count": suppressed_claim_count,
+                "claim_conflict_count": len(conflicts),
             },
+            conflicts=conflicts,
         )

@@ -264,6 +264,7 @@ class ZenBrainEventLedger:
         the answer layer explicitly opts in.
         """
         count = 0
+        propagated_observations: dict[str, list[str]] = {}
         for claim_version_id in claim_version_ids:
             self.record_claim_event(
                 claim_version_id,
@@ -286,15 +287,18 @@ class ZenBrainEventLedger:
                 claim_version_id,
                 [],
             )
+            for observation_id in observation_ids:
+                propagated_observations.setdefault(observation_id, []).append(claim_version_id)
+        for observation_id, source_claim_ids in propagated_observations.items():
             count += self.record_feedback(
-                observation_ids,
+                [observation_id],
                 event_type,
                 query=query,
                 caller=caller,
                 path_id=path_id,
                 payload={
                     **(payload or {}),
-                    "propagated_from_claim_version_id": claim_version_id,
+                    "propagated_from_claim_version_ids": source_claim_ids,
                 },
             )
         return count
@@ -367,3 +371,45 @@ class ZenBrainEventLedger:
                     continue
                 scores[observation_id] += 0.05 * (retrievability - 0.5)
         return {target_id: max(-1.0, min(1.0, score)) for target_id, score in scores.items()}
+
+    def project_claims(self, claim_version_ids: Sequence[str]) -> dict[str, dict[str, Any]]:
+        """Project static ClaimVersion status plus explicit feedback safely."""
+        ids = list(dict.fromkeys(claim_version_ids))
+        records = self.store.claim_versions(ids)
+        history = self.store.zenbrain_event_history(ids, target_type="claim")
+        latest: dict[str, str] = {}
+        for event in history:
+            latest[event["target_id"]] = event["event_type"]
+
+        projected: dict[str, dict[str, Any]] = {}
+        for claim_version_id in ids:
+            record = records.get(claim_version_id)
+            if record is None:
+                projected[claim_version_id] = {
+                    "claim_version_id": claim_version_id,
+                    "suppressed": False,
+                    "reason": "missing_claim_record",
+                }
+                continue
+            static_status = record["status"]
+            event_type = latest.get(claim_version_id)
+            suppressed = static_status in {"rejected", "superseded"}
+            reason = f"static_{static_status}" if suppressed else None
+            if event_type in {ZenBrainEventType.CORRECTED.value, ZenBrainEventType.REJECTED.value}:
+                suppressed = True
+                reason = f"feedback_{event_type}"
+            elif event_type in {
+                ZenBrainEventType.SELECTED.value,
+                ZenBrainEventType.CITED.value,
+                ZenBrainEventType.FOLLOWED_UP.value,
+                ZenBrainEventType.USER_CONFIRMED.value,
+            } and static_status == "active":
+                suppressed = False
+                reason = None
+            projected[claim_version_id] = {
+                **record,
+                "suppressed": suppressed,
+                "reason": reason,
+                "latest_feedback": event_type,
+            }
+        return projected
