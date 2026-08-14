@@ -1,0 +1,103 @@
+#!/usr/bin/env python3
+"""Batch, idempotent Graph 3.0 rebuild for Markdown files or directories."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+from dataclasses import asdict
+from datetime import datetime, timezone
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(HERE))
+
+from neurograph3.pipeline import GraphBuildStats, build_deepseek_relation_client, ingest_and_build_graph
+
+
+def _sources(inputs: list[Path]) -> list[Path]:
+    found: set[Path] = set()
+    for item in inputs:
+        path = item.expanduser().resolve()
+        if path.is_dir():
+            found.update(candidate for candidate in path.rglob("*.md") if candidate.is_file())
+        elif path.is_file():
+            found.add(path)
+        else:
+            raise FileNotFoundError(path)
+    return sorted(found)
+
+
+def _sum_stats(stats: list[GraphBuildStats]) -> dict[str, int | bool]:
+    fields = (
+        "observation_count",
+        "claim_candidates",
+        "evidence_links_submitted",
+        "entity_count",
+        "deterministic_relation_candidates",
+        "llm_calls",
+        "llm_accepted",
+        "llm_rejected",
+        "relations_submitted",
+    )
+    return {
+        **{field: sum(getattr(item, field) for item in stats) for field in fields},
+        "llm_budget_exhausted": any(item.llm_budget_exhausted for item in stats),
+    }
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Batch rebuild Graph 3.0 from Markdown")
+    parser.add_argument("sources", nargs="+", type=Path, help="Markdown files or directories")
+    parser.add_argument("--storage-root", type=Path, default=HERE / "data" / "graph3")
+    parser.add_argument("--dataset", default=None)
+    parser.add_argument("--deepseek-relations", action="store_true")
+    parser.add_argument("--max-llm-calls", type=int, default=0)
+    parser.add_argument("--model", default="deepseek-v4-flash")
+    parser.add_argument("--timeout", type=float, default=90.0)
+    parser.add_argument("--no-cooccurrence", action="store_true")
+    parser.add_argument("--report", type=Path, help="also write the JSON run report")
+    args = parser.parse_args()
+    if args.max_llm_calls < 0:
+        parser.error("--max-llm-calls must be non-negative")
+
+    sources = _sources(args.sources)
+    client = build_deepseek_relation_client(args.model, args.timeout) if args.deepseek_relations else None
+    remaining_budget = args.max_llm_calls
+    items: list[dict[str, object]] = []
+    stats: list[GraphBuildStats] = []
+    for source in sources:
+        calls_allowed = remaining_budget if args.max_llm_calls else 0
+        use_deepseek = args.deepseek_relations and (not args.max_llm_calls or remaining_budget > 0)
+        _, item_stats = ingest_and_build_graph(
+            source,
+            storage_root=args.storage_root,
+            dataset=args.dataset,
+            relation_client=client,
+            use_deepseek=use_deepseek,
+            max_llm_calls=calls_allowed,
+            include_cooccurrence=not args.no_cooccurrence,
+        )
+        stats.append(item_stats)
+        items.append({"source": str(source), "stats": asdict(item_stats)})
+        if args.max_llm_calls:
+            remaining_budget = max(0, remaining_budget - item_stats.llm_calls)
+
+    report = {
+        "run_at": datetime.now(timezone.utc).isoformat(),
+        "storage_root": str(args.storage_root.expanduser().resolve()),
+        "dataset": args.dataset,
+        "source_count": len(sources),
+        "sources": items,
+        "totals": _sum_stats(stats),
+    }
+    rendered = json.dumps(report, ensure_ascii=False, sort_keys=True)
+    if args.report:
+        args.report.expanduser().resolve().write_text(rendered + "\n", encoding="utf-8")
+    print(rendered)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
