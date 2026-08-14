@@ -391,6 +391,12 @@ EvidencePack 是 Codex、OpenClaw 或独立回答模型消费的稳定接口，�
 }
 ```
 
+当前 `EvidencePack` 将内容分为两层：`evidence` 是参与主排序和槽位覆盖的
+主证据，`context_evidence` 是由父子、同页或相邻页关系补出的上下文。上下文
+不会抢占主证据名额，但会带有 `context_relation`、`context_distance` 和
+`context_of_observation_ids`，并进入可定位 citations，便于回答层补全流程和
+前后条件。
+
 上下文组装规则：
 
 - 数字、单位、条件、限制和否定句尽量保留原文；

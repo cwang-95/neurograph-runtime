@@ -27,7 +27,10 @@ class AnswerEvidenceContext(BaseModel):
     def from_pack(cls, pack: EvidencePack) -> "AnswerEvidenceContext":
         return cls(
             query=pack.query,
-            observation_ids=[item.observation_id for item in pack.evidence],
+            observation_ids=[
+                item.observation_id
+                for item in [*pack.evidence, *pack.context_evidence]
+            ],
             claim_version_ids=[
                 claim_id
                 for item in pack.evidence

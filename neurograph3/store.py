@@ -722,6 +722,103 @@ class Graph3Store:
         hits.sort(key=lambda item: position.get(item["observation_id"], len(position)))
         return hits
 
+    def context_hits(
+        self,
+        observation_ids: list[str],
+        *,
+        per_seed: int = 2,
+        limit: int = 8,
+    ) -> list[dict[str, Any]]:
+        """Return bounded same-slide and adjacent-slide context observations."""
+        if not observation_ids or per_seed < 1 or limit < 1:
+            return []
+        rows = self.connection.execute(
+            """
+            SELECT o.*, s.locator_json, s.asset_id, s.element_type,
+                   s.parent_id, s.previous_id, s.next_id
+            FROM observations o
+            JOIN source_elements s ON s.element_id = o.element_id
+            ORDER BY s.asset_id, json_extract(s.locator_json, '$.char_start'), o.observation_id
+            """
+        ).fetchall()
+        by_observation = {row["observation_id"]: row for row in rows}
+        all_elements = {
+            row["element_id"]: row
+            for row in self.connection.execute(
+                "SELECT element_id, asset_id, parent_id, previous_id, next_id, locator_json FROM source_elements"
+            ).fetchall()
+        }
+        seeds = [by_observation[observation_id] for observation_id in observation_ids if observation_id in by_observation]
+        chosen: dict[str, dict[str, Any]] = {}
+        for seed in seeds:
+            seed_element = all_elements.get(seed["element_id"], seed)
+            seed_locator = json.loads(seed["locator_json"])
+            seed_parent = all_elements.get(seed_element["parent_id"])
+            neighboring_parent_ids = set()
+            if seed_parent is not None:
+                neighboring_parent_ids.update(
+                    item
+                    for item in (seed_parent["previous_id"], seed_parent["next_id"])
+                    if item
+                )
+            candidates: list[tuple[int, int, sqlite3.Row, str]] = []
+            for row in rows:
+                if row["observation_id"] in observation_ids or row["asset_id"] != seed["asset_id"]:
+                    continue
+                relation: str | None = None
+                priority = 99
+                row_element = all_elements.get(row["element_id"], row)
+                if row_element["parent_id"] == seed_element["parent_id"]:
+                    relation = "same_parent"
+                    priority = 0
+                elif row_element["parent_id"] in neighboring_parent_ids:
+                    relation = "adjacent_slide"
+                    priority = 1
+                else:
+                    row_locator = json.loads(row["locator_json"])
+                    same_slide = (
+                        seed_locator.get("slide") is not None
+                        and row_locator.get("slide") == seed_locator.get("slide")
+                    )
+                    if same_slide:
+                        relation = "same_slide"
+                        priority = 2
+                    else:
+                        continue
+                row_locator = json.loads(row["locator_json"])
+                seed_start = seed_locator.get("char_start") or 0
+                row_start = row_locator.get("char_start") or 0
+                distance = abs(int(row_start) - int(seed_start))
+                candidates.append((priority, distance, row, relation))
+            candidates.sort(key=lambda item: (item[0], item[1], item[2]["observation_id"]))
+            for priority, distance, row, relation in candidates[:per_seed]:
+                observation_id = row["observation_id"]
+                current = chosen.get(observation_id)
+                if current is None or (priority, distance) < (current["_context_priority"], current["_context_distance"]):
+                    hit = self._observation_hit(row)
+                    hit.update(
+                        {
+                            "_context_of_observation_ids": [seed["observation_id"]],
+                            "_context_relation": relation,
+                            "_context_distance": distance,
+                            "_context_priority": priority,
+                        }
+                    )
+                    chosen[observation_id] = hit
+                elif seed["observation_id"] not in current["_context_of_observation_ids"]:
+                    current["_context_of_observation_ids"].append(seed["observation_id"])
+        selected = sorted(
+            chosen.values(),
+            key=lambda item: (
+                item["_context_priority"],
+                item["_context_distance"],
+                item["observation_id"],
+            ),
+        )[:limit]
+        for hit in selected:
+            hit.pop("_context_priority", None)
+        return selected
+
     def expand_graph(
         self,
         entity_ids: list[str],

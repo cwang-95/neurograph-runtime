@@ -98,6 +98,7 @@ def ingest_markdown(
     )
     elements: list[SourceElement] = [document_element]
     occurrence_groups: dict[tuple[ObservationKind, str], list[SourceElement]] = defaultdict(list)
+    previous_slide_element: SourceElement | None = None
 
     slide_matches = list(_SLIDE_RE.finditer(document_element.text or ""))
     if not slide_matches:
@@ -121,6 +122,10 @@ def ingest_markdown(
             text=body,
             parent_id=document_element.element_id,
         )
+        if previous_slide_element is not None:
+            previous_slide_element.next_id = slide_element.element_id
+            slide_element.previous_id = previous_slide_element.element_id
+        previous_slide_element = slide_element
         elements.append(slide_element)
 
         section_matches = list(_SECTION_RE.finditer(body))

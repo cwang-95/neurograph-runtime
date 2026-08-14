@@ -115,6 +115,9 @@ class EvidenceItem(BaseModel):
     route_contributions: dict[str, float] = Field(default_factory=dict)
     combined_score: float = 0.0
     retrieval_routes: list[str] = Field(default_factory=list)
+    context_of_observation_ids: list[str] = Field(default_factory=list)
+    context_relation: str | None = None
+    context_distance: int | None = None
 
 
 class EvidencePack(BaseModel):
@@ -129,6 +132,7 @@ class EvidencePack(BaseModel):
     conflicts: list[dict[str, Any]] = Field(default_factory=list)
     missing: list[str] = Field(default_factory=list)
     citations: list[dict[str, Any]] = Field(default_factory=list)
+    context_evidence: list[EvidenceItem] = Field(default_factory=list)
     follow_up_required: bool = False
     follow_up_questions: list[FollowUpQuestion] = Field(default_factory=list)
     retrieval_trace: dict[str, Any] = Field(default_factory=dict)
@@ -326,6 +330,35 @@ class Graph3Retriever:
             question = "你提到的对象还不明确。请补充具体方法、模型、设备或讲座主题。"
             reason = "问题使用了指代词，但当前上下文无法唯一确定指代对象。"
         return FollowUpQuestion(question=question, reason=reason, options=options)
+
+    def _expand_context(self, evidence: list[EvidenceItem], limit: int) -> list[EvidenceItem]:
+        if not evidence or limit < 1:
+            return []
+        primary_ids = {item.observation_id for item in evidence}
+        hits = self.store.context_hits(
+            list(primary_ids),
+            per_seed=2,
+            limit=limit,
+        )
+        context_items: list[EvidenceItem] = []
+        for hit in hits:
+            if hit["observation_id"] in primary_ids:
+                continue
+            context_of = hit.pop("_context_of_observation_ids", [])
+            context_relation = hit.pop("_context_relation", None)
+            context_distance = hit.pop("_context_distance", None)
+            context_items.append(
+                EvidenceItem.model_validate(
+                    {
+                        **hit,
+                        "context_of_observation_ids": context_of,
+                        "context_relation": context_relation,
+                        "context_distance": context_distance,
+                        "retrieval_routes": ["context"],
+                    }
+                )
+            )
+        return context_items
 
     def retrieve(self, query: str, limit: int = 8) -> EvidencePack:
         plan = QueryPlan.from_query(query)
@@ -571,8 +604,24 @@ class Graph3Retriever:
         follow_up_questions = self._follow_up_questions(plan, slot_status, evidence)
         if ambiguity_question is not None:
             follow_up_questions.insert(0, ambiguity_question)
+        context_evidence = self._expand_context(
+            evidence,
+            limit=min(max(limit * 2, 4), 12),
+        )
+        trace["context_expansion"] = {
+            "seed_count": len(evidence),
+            "context_count": len(context_evidence),
+            "relations": sorted(
+                {
+                    item.context_relation
+                    for item in context_evidence
+                    if item.context_relation
+                }
+            ),
+        }
         citations = [
             {
+                "role": "primary",
                 "observation_id": item.observation_id,
                 "asset_id": item.asset_id,
                 "element_id": item.element_id,
@@ -582,6 +631,18 @@ class Graph3Retriever:
             }
             for item in evidence
         ]
+        citations.extend(
+            {
+                "role": "context",
+                "observation_id": item.observation_id,
+                "asset_id": item.asset_id,
+                "element_id": item.element_id,
+                "aligned_element_ids": item.aligned_element_ids,
+                "locator": item.locator,
+                "context_of_observation_ids": item.context_of_observation_ids,
+            }
+            for item in context_evidence
+        )
         plan = plan.model_copy(
             update={
                 "routes": trace["routes"],
@@ -597,6 +658,7 @@ class Graph3Retriever:
             slot_status=slot_status,
             slot_evidence=slot_evidence,
             evidence=evidence,
+            context_evidence=context_evidence,
             graph_paths=graph_paths,
             missing=missing,
             citations=citations,
