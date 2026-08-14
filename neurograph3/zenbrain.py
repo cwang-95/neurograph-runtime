@@ -77,8 +77,19 @@ class ZenBrainEventLedger:
         path_id: str | None = None,
         created_at: datetime | None = None,
         payload: dict[str, Any] | None = None,
-    ) -> str:
-        return self.store.record_zenbrain_event(
+    ) -> tuple[str, bool]:
+        event_id = self.store.zenbrain_event_id(
+            target_type=target_type,
+            target_id=target_id,
+            event_type=event_type.value,
+            query=query,
+            caller=caller,
+            path_id=path_id,
+            created_at=created_at,
+            payload=payload,
+        )
+        was_present = self.store.zenbrain_event_exists(event_id)
+        self.store.record_zenbrain_event(
             target_type=target_type,
             target_id=target_id,
             observation_id=target_id if target_type == "observation" else None,
@@ -89,6 +100,7 @@ class ZenBrainEventLedger:
             created_at=created_at,
             payload=payload,
         )
+        return event_id, not was_present
 
     def record_event(
         self,
@@ -101,7 +113,7 @@ class ZenBrainEventLedger:
         created_at: datetime | None = None,
         payload: dict[str, Any] | None = None,
     ) -> str:
-        event_id = self._record_target_event(
+        event_id, inserted = self._record_target_event(
             "observation",
             observation_id,
             event_type,
@@ -111,7 +123,8 @@ class ZenBrainEventLedger:
             created_at=created_at,
             payload=payload,
         )
-        self._update_fsrs(observation_id, event_type)
+        if inserted:
+            self._update_fsrs(observation_id, event_type)
         return event_id
 
     def record_relation_event(
@@ -134,7 +147,7 @@ class ZenBrainEventLedger:
             path_id=path_id,
             created_at=created_at,
             payload=payload,
-        )
+        )[0]
 
     def record_claim_event(
         self,
@@ -156,7 +169,7 @@ class ZenBrainEventLedger:
             path_id=path_id,
             created_at=created_at,
             payload=payload,
-        )
+        )[0]
 
     def record_path_event(
         self,
@@ -176,7 +189,7 @@ class ZenBrainEventLedger:
             caller=caller,
             created_at=created_at,
             payload=payload,
-        )
+        )[0]
 
     def record_pack_event(
         self,
@@ -256,6 +269,7 @@ class ZenBrainEventLedger:
         path_id: str | None = None,
         payload: dict[str, Any] | None = None,
         propagate_to_observations: bool = False,
+        allowed_observation_ids: Sequence[str] | None = None,
     ) -> int:
         """Record fact-level feedback with conservative source propagation.
 
@@ -287,6 +301,9 @@ class ZenBrainEventLedger:
                 claim_version_id,
                 [],
             )
+            if allowed_observation_ids is not None:
+                allowed = set(allowed_observation_ids)
+                observation_ids = [observation_id for observation_id in observation_ids if observation_id in allowed]
             for observation_id in observation_ids:
                 propagated_observations.setdefault(observation_id, []).append(claim_version_id)
         for observation_id, source_claim_ids in propagated_observations.items():
