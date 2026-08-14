@@ -105,6 +105,8 @@ class EvidenceItem(BaseModel):
     vector_score: float | None = None
     graph_score: float | None = None
     zenbrain_prior: float = 0.0
+    zenbrain_edge_prior: float = 0.0
+    zenbrain_path_prior: float = 0.0
     combined_score: float = 0.0
     retrieval_routes: list[str] = Field(default_factory=list)
 
@@ -343,21 +345,62 @@ class Graph3Retriever:
                 trace["vector_error"] = str(exc)
 
         prior_scores: dict[str, float] = {}
+        edge_prior_scores: dict[str, float] = {}
+        path_prior_scores: dict[str, float] = {}
         if self.zenbrain_prior is not None and candidates:
             try:
                 prior_scores = self.zenbrain_prior.score(list(candidates))
                 trace["routes"].append("zenbrain_prior")
                 trace["zenbrain_prior_candidates"] = len(prior_scores)
+                path_ids = [path["path_id"] for path in graph_paths if path.get("path_id")]
+                relation_ids = [
+                    edge["relation_id"]
+                    for path in graph_paths
+                    for edge in path.get("path_edges", [])
+                    if edge.get("relation_id")
+                ]
+                if path_ids:
+                    path_prior_scores = self.zenbrain_prior.score_targets("path", list(dict.fromkeys(path_ids)))
+                if relation_ids:
+                    edge_prior_scores = self.zenbrain_prior.score_targets(
+                        "relation", list(dict.fromkeys(relation_ids))
+                    )
+                for path in graph_paths:
+                    path["zenbrain_path_prior"] = float(path_prior_scores.get(path.get("path_id"), 0.0))
+                    path["zenbrain_edge_prior"] = max(
+                        (
+                            float(edge_prior_scores.get(edge.get("relation_id"), 0.0))
+                            for edge in path.get("path_edges", [])
+                        ),
+                        default=0.0,
+                    )
+                if path_ids or relation_ids:
+                    trace["routes"].append("zenbrain_graph_prior")
+                    trace["zenbrain_path_candidates"] = len(path_prior_scores)
+                    trace["zenbrain_edge_candidates"] = len(edge_prior_scores)
             except Exception as exc:  # keep evidence retrieval available
                 trace["zenbrain_prior_error"] = str(exc)
 
         for item in candidates.values():
             item["zenbrain_prior"] = max(-1.0, min(1.0, float(prior_scores.get(item["observation_id"], 0.0))))
+            relevant_paths = [
+                path for path in graph_paths if item["observation_id"] in path.get("observation_ids", [])
+            ]
+            item["zenbrain_path_prior"] = max(
+                (float(path.get("zenbrain_path_prior", 0.0)) for path in relevant_paths),
+                default=0.0,
+            )
+            item["zenbrain_edge_prior"] = max(
+                (float(path.get("zenbrain_edge_prior", 0.0)) for path in relevant_paths),
+                default=0.0,
+            )
             item["combined_score"] = (
                 float(item.get("lexical_score", 0.0))
                 + float(item.get("vector_score", 0.0) or 0.0)
                 + float(item.get("graph_score", 0.0) or 0.0) * 0.5
                 + item["zenbrain_prior"] * 0.1
+                + item["zenbrain_path_prior"] * 0.05
+                + item["zenbrain_edge_prior"] * 0.03
             )
         evidence = self._select_evidence(plan, candidates, limit)
         slot_status, slot_evidence = self._evaluate_slots(plan, evidence)
