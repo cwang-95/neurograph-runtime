@@ -133,10 +133,17 @@ class EvidencePack(BaseModel):
 
 
 class Graph3Retriever:
-    def __init__(self, store: Graph3Store, embedder: Any | None = None, zenbrain_prior: Any | None = None):
+    def __init__(
+        self,
+        store: Graph3Store,
+        embedder: Any | None = None,
+        zenbrain_prior: Any | None = None,
+        vector_index: Any | None = None,
+    ):
         self.store = store
         self.embedder = embedder
         self.zenbrain_prior = zenbrain_prior
+        self.vector_index = vector_index
 
     def index_vectors(self) -> int:
         if self.embedder is None:
@@ -164,6 +171,8 @@ class Graph3Retriever:
                 {item["observation_id"]: vector for item, vector in zip(batch, vectors)},
             )
             indexed += len(vectors)
+        if self.vector_index is not None and indexed:
+            self.vector_index.rebuild(self.store.list_embedding_records())
         return indexed
 
     @staticmethod
@@ -340,13 +349,38 @@ class Graph3Retriever:
         if self.embedder is not None:
             try:
                 query_vector = self.embedder.embed([query])[0]
-                vector_hits = self.store.search_vector(query_vector, limit=min(limit * 3, plan.max_candidates))
+                vector_limit = min(limit * 3, plan.max_candidates)
+                if self.vector_index is None:
+                    vector_hits = self.store.search_vector(query_vector, limit=vector_limit)
+                else:
+                    indexed_hits = self.vector_index.search(query_vector, limit=vector_limit)
+                    vector_scores = {
+                        item["observation_id"]: float(item["vector_score"])
+                        for item in indexed_hits
+                    }
+                    vector_hits = self.store.observation_hits(
+                        list(vector_scores), vector_scores=vector_scores
+                    )
                 for hit in vector_hits:
                     add_hit(hit, "vector", hit.get("vector_score"))
                 trace["routes"].append("vector")
                 trace["vector_candidates"] = len(vector_hits)
+                if self.vector_index is not None:
+                    trace["vector_backend"] = getattr(self.vector_index, "backend_name", "custom")
             except Exception as exc:  # keep lexical/graph retrieval available
                 trace["vector_error"] = str(exc)
+                if self.vector_index is not None:
+                    trace["vector_fallback"] = "sqlite_bruteforce"
+                    try:
+                        vector_hits = self.store.search_vector(
+                            query_vector, limit=min(limit * 3, plan.max_candidates)
+                        )
+                        for hit in vector_hits:
+                            add_hit(hit, "vector", hit.get("vector_score"))
+                        trace["routes"].append("vector")
+                        trace["vector_candidates"] = len(vector_hits)
+                    except Exception as fallback_exc:
+                        trace["vector_fallback_error"] = str(fallback_exc)
 
         prior_scores: dict[str, float] = {}
         edge_prior_scores: dict[str, float] = {}

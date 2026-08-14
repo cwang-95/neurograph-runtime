@@ -400,6 +400,28 @@ class Graph3Store:
                     (observation_id, model, len(vector), json.dumps(vector, separators=(",", ":"))),
                 )
 
+    def list_embedding_records(self, model: str | None = None) -> list[dict[str, Any]]:
+        """Return rebuildable embedding rows without exposing SQLite internals."""
+        query = """
+            SELECT observation_id, model, dimensions, vector_json
+            FROM observation_embeddings
+        """
+        params: tuple[Any, ...] = ()
+        if model is not None:
+            query += " WHERE model = ?"
+            params = (model,)
+        query += " ORDER BY observation_id"
+        rows = self.connection.execute(query, params).fetchall()
+        return [
+            {
+                "observation_id": row["observation_id"],
+                "model": row["model"],
+                "dimensions": row["dimensions"],
+                "vector": json.loads(row["vector_json"]),
+            }
+            for row in rows
+        ]
+
     def search_vector(self, query_vector: list[float], limit: int = 20) -> list[dict[str, Any]]:
         rows = self.connection.execute(
             """
@@ -671,7 +693,12 @@ class Graph3Store:
             for row in rows
         ]
 
-    def observation_hits(self, observation_ids: list[str]) -> list[dict[str, Any]]:
+    def observation_hits(
+        self,
+        observation_ids: list[str],
+        vector_scores: dict[str, float] | None = None,
+    ) -> list[dict[str, Any]]:
+        """Load full evidence hits for graph or external vector-index IDs."""
         if not observation_ids:
             return []
         placeholders = ",".join("?" for _ in observation_ids)
@@ -684,7 +711,16 @@ class Graph3Store:
             """,
             observation_ids,
         ).fetchall()
-        return [self._observation_hit(row) for row in rows]
+        scores = vector_scores or {}
+        hits = []
+        for row in rows:
+            hit = self._observation_hit(row)
+            if vector_scores is not None:
+                hit["vector_score"] = float(scores.get(row["observation_id"], 0.0))
+            hits.append(hit)
+        position = {observation_id: index for index, observation_id in enumerate(observation_ids)}
+        hits.sort(key=lambda item: position.get(item["observation_id"], len(position)))
+        return hits
 
     def expand_graph(
         self,
