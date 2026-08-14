@@ -24,6 +24,12 @@ ID 通过 `scripts/graph3_feedback` 回写。需要读取 FSRS 弱先验时增�
 NEUROGRAPH_GRAPH3_FSRS=1
 ```
 
+适配器默认优先使用 Graph 3.0 根目录下的 `.venv/bin/python`，这样可直接使用 Graph 3.0 的 ANN 依赖；若该环境不存在，才回退到 `~/.cognee-venv/bin/python`。也可以显式指定：
+
+```bash
+NEUROGRAPH_GRAPH3_PYTHON=/path/to/graph3/.venv/bin/python
+```
+
 如果 Graph 3.0 的语料已经建立 embedding，可继续通过环境变量启用语义路由；这些变量只透传到底层入口，不改变默认的词法+图检索：
 
 ```bash

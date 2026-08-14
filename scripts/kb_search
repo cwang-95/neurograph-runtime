@@ -54,6 +54,10 @@ fi
 if [[ "${NEUROGRAPH_BACKEND:-cognee}" == "graph3" && "$DOMAIN" != "memory" ]]; then
   GRAPH3_ROOT="${NEUROGRAPH_GRAPH3_ROOT:-/Users/wangcheng/Projects/neurograph-graph-3.0}"
   GRAPH3_STORAGE="${NEUROGRAPH_GRAPH3_STORAGE:-$GRAPH3_ROOT/data/graph3}"
+  GRAPH3_PYTHON="${NEUROGRAPH_GRAPH3_PYTHON:-$GRAPH3_ROOT/.venv/bin/python}"
+  if [[ ! -x "$GRAPH3_PYTHON" ]]; then
+    GRAPH3_PYTHON="$HOME/.cognee-venv/bin/python"
+  fi
   GRAPH3_QUERY="$GRAPH3_ROOT/scripts/graph3_query"
   GRAPH3_ANSWER="$GRAPH3_ROOT/scripts/graph3_answer"
   if [[ "$MODE" == "answer-draft" ]]; then
@@ -91,7 +95,7 @@ if [[ "${NEUROGRAPH_BACKEND:-cognee}" == "graph3" && "$DOMAIN" != "memory" ]]; t
   if [[ "$MODE" == "answer-draft" ]]; then
     GRAPH3_ARGS+=(--max-items "$TOP")
   fi
-  exec ~/.cognee-venv/bin/python -u "$GRAPH3_ENTRY" "${GRAPH3_ARGS[@]}"
+  exec "$GRAPH3_PYTHON" -u "$GRAPH3_ENTRY" "${GRAPH3_ARGS[@]}"
 fi
 
 if [[ "$DOMAIN" == "memory" ]]; then
