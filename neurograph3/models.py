@@ -250,7 +250,16 @@ class ClaimVersion(ContractModel):
             "valid_time": kwargs.get("valid_time"),
         }
         claim_id = stable_id("claim", identity)
-        claim_version_id = stable_id("claim_version", {"claim_id": claim_id, "version": version})
+        claim_version_id = stable_id(
+            "claim_version",
+            {
+                "claim_id": claim_id,
+                "version": version,
+                "object_value": object_value,
+                "polarity": kwargs.get("polarity", "positive"),
+                "modality": kwargs.get("modality", "certain"),
+            },
+        )
         return cls(
             claim_id=claim_id,
             claim_version_id=claim_version_id,

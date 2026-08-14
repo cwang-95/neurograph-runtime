@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from .ingest import IngestResult
+from .models import ClaimVersion, EvidenceLink
 
 
 class Graph3Store:
@@ -67,6 +68,26 @@ class Graph3Store:
                 confidence REAL,
                 created_at TEXT NOT NULL,
                 metadata_json TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS claim_versions (
+                claim_version_id TEXT PRIMARY KEY,
+                claim_id TEXT NOT NULL,
+                subject TEXT NOT NULL,
+                predicate TEXT NOT NULL,
+                object_value_json TEXT NOT NULL,
+                unit TEXT,
+                status TEXT NOT NULL,
+                payload_json TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS evidence_links (
+                link_id TEXT PRIMARY KEY,
+                observation_id TEXT NOT NULL REFERENCES observations(observation_id),
+                claim_version_id TEXT NOT NULL REFERENCES claim_versions(claim_version_id),
+                relation TEXT NOT NULL,
+                strength REAL NOT NULL,
+                payload_json TEXT NOT NULL
             );
 
             CREATE VIRTUAL TABLE IF NOT EXISTS observation_fts USING fts5(
@@ -147,8 +168,47 @@ class Graph3Store:
     def counts(self) -> dict[str, int]:
         return {
             table: int(self.connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])
-            for table in ("raw_assets", "source_elements", "observations")
+            for table in ("raw_assets", "source_elements", "observations", "claim_versions", "evidence_links")
         }
+
+    def put_claims(self, claims: list[tuple[ClaimVersion, EvidenceLink]]) -> None:
+        """Persist candidate claims and their observation links idempotently."""
+        with self.connection:
+            for claim, link in claims:
+                self.connection.execute(
+                    """
+                    INSERT OR IGNORE INTO claim_versions(
+                        claim_version_id, claim_id, subject, predicate,
+                        object_value_json, unit, status, payload_json
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        claim.claim_version_id,
+                        claim.claim_id,
+                        claim.subject,
+                        claim.predicate,
+                        json.dumps(claim.object_value, ensure_ascii=False, sort_keys=True),
+                        claim.unit,
+                        claim.status.value,
+                        json.dumps(claim.model_dump(mode="json"), ensure_ascii=False, sort_keys=True),
+                    ),
+                )
+                self.connection.execute(
+                    """
+                    INSERT OR IGNORE INTO evidence_links(
+                        link_id, observation_id, claim_version_id,
+                        relation, strength, payload_json
+                    ) VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        link.link_id,
+                        link.observation_id,
+                        link.claim_version_id,
+                        link.relation.value,
+                        link.strength,
+                        json.dumps(link.model_dump(mode="json"), ensure_ascii=False, sort_keys=True),
+                    ),
+                )
 
     def search_lexical(self, query: str, limit: int = 20) -> list[dict[str, Any]]:
         """Search exact terms and numbers, returning source-aware hits."""
