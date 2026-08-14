@@ -99,6 +99,7 @@ def main() -> int:
     parser.add_argument("--embedding-timeout", type=float, default=30.0)
     parser.add_argument("--ann-index", type=Path)
     parser.add_argument("--ann-backend", choices=("auto", "hnswlib", "faiss"), default="auto")
+    parser.add_argument("--corpus-label", default="unspecified")
     parser.add_argument("--report", type=Path)
     args = parser.parse_args()
     if args.top < 1:
@@ -142,6 +143,7 @@ def main() -> int:
     latencies = [result["latency_ms"] for result in results]
     report = {
         "storage_root": str(args.storage_root),
+        "corpus_label": args.corpus_label,
         "gold_file": str(args.gold_file),
         "case_count": len(results),
         "passed_cases": sum(result["passed"] for result in results),

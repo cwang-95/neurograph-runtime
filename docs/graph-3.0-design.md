@@ -644,6 +644,7 @@ Gold-query 评测入口：
 scripts/graph3_eval \
   --storage-root data/graph3 \
   --gold-file evaluation/aapm-smoke-gold.json \
+  --corpus-label aapm_smoke \
   --report data/graph3-evaluation.json
 ```
 
@@ -651,6 +652,26 @@ Gold case 可声明 `expected_terms`、`expected_observation_ids`、必需
 `required_slots` 和 `must_follow_up`。报告分别记录主证据命中、上下文命中、
 槽位状态、追问结果、引用可追溯率、重复率和延迟；它不调用最终回答模型，
 因此可以作为 Graph 3.0 与 2.0/其他检索器的共同评测协议。
+
+2.0 baseline 只读采集入口：
+
+```bash
+scripts/cognee_eval \
+  --gold-file evaluation/aapm-smoke-gold.json \
+  --workdir /Users/wangcheng/.openclaw/workspace/projects/neurograph/cognee-bridge \
+  --python /Users/wangcheng/.cognee-venv/bin/python \
+  --dataset wiki_full --corpus-label cognee_wiki_full \
+  --report /tmp/cognee-baseline.json
+
+scripts/graph3_ab_compare \
+  --graph3-report /tmp/graph3-evaluation.json \
+  --baseline-report /tmp/cognee-baseline.json
+```
+
+只有两边 `corpus_label` 相同，A/B 结果才可解释。Cognee 2.0 当前 graph-evidence
+输出没有稳定 Observation/Citation ID，也没有 EvidenceSlot 状态，评测报告会把
+这些指标标为 unsupported，不会用文本猜测替代。语料标签不匹配时，比较器只展示
+两边原始指标，不输出性能差值；如需强制校验同语料，可追加 `--corpus-match`。
 
 ## 11. 实施与迁移策略
 
