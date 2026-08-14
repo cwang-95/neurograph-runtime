@@ -150,6 +150,7 @@ class Graph3Store:
             CREATE INDEX IF NOT EXISTS idx_elements_asset ON source_elements(asset_id);
             CREATE INDEX IF NOT EXISTS idx_elements_duplicate ON source_elements(duplicate_group_id);
             CREATE INDEX IF NOT EXISTS idx_observations_element ON observations(element_id);
+            CREATE INDEX IF NOT EXISTS idx_zenbrain_events_target ON zenbrain_events(target_type, target_id, created_at);
             """
         )
         self.connection.commit()
@@ -271,7 +272,12 @@ class Graph3Store:
             )
         return event_id
 
-    def zenbrain_event_history(self, target_ids: list[str]) -> list[dict[str, Any]]:
+    def zenbrain_event_history(
+        self,
+        target_ids: list[str],
+        *,
+        target_type: str = "observation",
+    ) -> list[dict[str, Any]]:
         if not target_ids:
             return []
         placeholders = ",".join("?" for _ in target_ids)
@@ -279,10 +285,10 @@ class Graph3Store:
             f"""
             SELECT target_id, event_type, created_at, query, caller, path_id
             FROM zenbrain_events
-            WHERE target_type = 'observation' AND target_id IN ({placeholders})
+            WHERE target_type = ? AND target_id IN ({placeholders})
             ORDER BY created_at
             """,
-            target_ids,
+            (target_type, *target_ids),
         ).fetchall()
         return [dict(row) for row in rows]
 
@@ -597,6 +603,7 @@ class Graph3Store:
             if row["predicate"] not in allowed:
                 continue
             edge = {
+                "relation_id": row["relation_id"],
                 "source_entity_id": row["source_entity_id"],
                 "source_name": row["source_name"],
                 "target_entity_id": row["target_entity_id"],
@@ -667,6 +674,20 @@ class Graph3Store:
                 last_edge = state["edges"][-1]
                 paths.append(
                     {
+                        "path_id": stable_id(
+                            "graph_path",
+                            {
+                                "seed_entity_id": state["seed_entity_id"],
+                                "nodes": state["nodes"],
+                                "edges": [
+                                    {
+                                        "relation_id": edge["relation_id"],
+                                        "traversal_direction": edge["traversal_direction"],
+                                    }
+                                    for edge in state["edges"]
+                                ],
+                            },
+                        ),
                         "hop": hop,
                         "seed_entity_id": state["seed_entity_id"],
                         "seed_name": entity_names[state["seed_entity_id"]],
@@ -683,6 +704,7 @@ class Graph3Store:
                         "extraction_method": last_edge["extraction_method"],
                         "path_edges": [
                             {
+                                "relation_id": edge["relation_id"],
                                 "source_entity_id": edge["source_entity_id"],
                                 "source_name": edge["source_name"],
                                 "predicate": edge["predicate"],
