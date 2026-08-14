@@ -1,13 +1,14 @@
 #!/bin/bash
 # ============================================================
 # kb_search — 知识图谱自动检索工具(自动感知的"第一查")
-# 用法: kb_search "查询内容" [topN] [--answer|--graph-evidence|--evidence] [--json]
+# 用法: kb_search "查询内容" [topN] [--answer|--answer-draft|--graph-evidence|--evidence] [--json]
 #   查询内容:  必填
 #   topN:      可选, 返回几条(默认4)
 #   --memory:  查记忆域(memory_rag, 私有经历)
 #   --github:  只查 GitHub 项目数据集
 #   --all:     查文献+项目
-# 默认: --graph-evidence（图增强证据，由 OpenClaw/Codex 上层模型回答）
+# 默认知识域后端: Graph 3.0；回滚: NEUROGRAPH_BACKEND=cognee
+# 默认模式: --graph-evidence（图增强证据，由 OpenClaw/Codex 上层模型回答）
 # 输出: 精简 Top 结果, 便于 agent 直接读取并基于图谱作答
 # ============================================================
 cd ~/.openclaw/workspace/projects/neurograph/cognee-bridge
@@ -34,6 +35,7 @@ for a in "${@:2}"; do
     --all)    DATASETS="wiki_full,github_projects" ;;
     --evidence|--chunks) MODE="evidence" ;;
     --graph-evidence) MODE="graph-evidence" ;;
+    --answer-draft) MODE="answer-draft" ;;
     --answer) MODE="answer" ;;
     --json) FORMAT="json" ;;
     *) echo "未知参数: $a" >&2; exit 2 ;;
@@ -44,8 +46,59 @@ DSKEY=$(python3 -c "import json,os; print(json.load(open(os.path.expanduser('~/.
 export DASHSCOPE_API_KEY="$DSKEY"
 
 if [[ -z "$Q" ]]; then
-  echo "用法: kb_search \"查询内容\" [topN] [--answer|--graph-evidence|--evidence] [--json]"
+  echo "用法: kb_search \"查询内容\" [topN] [--answer|--answer-draft|--graph-evidence|--evidence] [--json]"
   exit 1
+fi
+
+# Graph 3.0 is the deployed knowledge-domain backend. The old Cognee path
+# remains the explicit rollback and continues to serve memory/project domains.
+if [[ "${NEUROGRAPH_BACKEND:-graph3}" == "graph3" && "$DOMAIN" == "knowledge" && "$DATASETS" == "wiki_full" ]]; then
+  GRAPH3_ROOT="${NEUROGRAPH_GRAPH3_ROOT:-/Users/wangcheng/Projects/neurograph-graph-3.0}"
+  GRAPH3_STORAGE="${NEUROGRAPH_GRAPH3_STORAGE:-$GRAPH3_ROOT/data/graph3-openclaw-full}"
+  GRAPH3_PYTHON="${NEUROGRAPH_GRAPH3_PYTHON:-$GRAPH3_ROOT/.venv/bin/python}"
+  if [[ ! -x "$GRAPH3_PYTHON" ]]; then
+    GRAPH3_PYTHON="$HOME/.cognee-venv/bin/python"
+  fi
+  GRAPH3_QUERY="$GRAPH3_ROOT/scripts/graph3_query"
+  GRAPH3_ANSWER="$GRAPH3_ROOT/scripts/graph3_answer"
+  if [[ "$MODE" == "answer-draft" ]]; then
+    GRAPH3_ENTRY="$GRAPH3_ANSWER"
+  else
+    GRAPH3_ENTRY="$GRAPH3_QUERY"
+  fi
+  if [[ ! -x "$GRAPH3_ENTRY" ]]; then
+    echo "Graph 3.0 查询入口不存在或不可执行: $GRAPH3_ENTRY" >&2
+    exit 2
+  fi
+  GRAPH3_ARGS=("$Q" --storage-root "$GRAPH3_STORAGE" --top "$TOP")
+  if [[ "${NEUROGRAPH_GRAPH3_FSRS:-0}" == "1" ]]; then
+    GRAPH3_ARGS+=(--fsrs)
+  fi
+  if [[ -n "${NEUROGRAPH_GRAPH3_EMBEDDING_ENDPOINT:-}" ]]; then
+    GRAPH3_ARGS+=(--embedding-endpoint "$NEUROGRAPH_GRAPH3_EMBEDDING_ENDPOINT")
+  fi
+  if [[ -n "${NEUROGRAPH_GRAPH3_EMBEDDING_MODEL:-}" ]]; then
+    GRAPH3_ARGS+=(--embedding-model "$NEUROGRAPH_GRAPH3_EMBEDDING_MODEL")
+  fi
+  if [[ -n "${NEUROGRAPH_GRAPH3_EMBEDDING_TIMEOUT:-}" ]]; then
+    GRAPH3_ARGS+=(--embedding-timeout "$NEUROGRAPH_GRAPH3_EMBEDDING_TIMEOUT")
+  fi
+  if [[ -n "${NEUROGRAPH_GRAPH3_ANN_INDEX:-}" ]]; then
+    GRAPH3_ARGS+=(--ann-index "$NEUROGRAPH_GRAPH3_ANN_INDEX")
+  elif [[ -d "$GRAPH3_STORAGE/vector_index" ]]; then
+    GRAPH3_ARGS+=(--ann-index "$GRAPH3_STORAGE/vector_index")
+  fi
+  if [[ -n "${NEUROGRAPH_GRAPH3_ANN_BACKEND:-}" ]]; then
+    GRAPH3_ARGS+=(--ann-backend "$NEUROGRAPH_GRAPH3_ANN_BACKEND")
+  fi
+  if [[ "$MODE" == "answer" ]]; then
+    echo "Graph 3.0 后端当前只返回 EvidencePack；请使用 --graph-evidence，由上层模型回答。" >&2
+    exit 2
+  fi
+  if [[ "$MODE" == "answer-draft" ]]; then
+    GRAPH3_ARGS+=(--max-items "$TOP")
+  fi
+  exec "$GRAPH3_PYTHON" -u "$GRAPH3_ENTRY" "${GRAPH3_ARGS[@]}"
 fi
 
 if [[ "$DOMAIN" == "memory" ]]; then
