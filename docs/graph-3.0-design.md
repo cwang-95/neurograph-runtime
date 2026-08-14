@@ -687,6 +687,31 @@ scripts/graph3_ab_compare \
 这些指标标为 unsupported，不会用文本猜测替代。语料标签不匹配时，比较器只展示
 两边原始指标，不输出性能差值；如需强制校验同语料，可追加 `--corpus-match`。
 
+2026-08-14 在同一篇 AAPM 材料上的独立实测（源文件 SHA-256：
+`273415fd6c8944c4dd5e28ba8bfb9b928af49fa110f0d6d50669c1477a15c1db`）：
+
+| 指标 | Graph 3.0 | Cognee 2.0 baseline |
+| --- | ---: | ---: |
+| Gold cases | 3/3 | 3/3 |
+| 平均检索延迟 | 4.75 ms | 5458.73 ms |
+| p95 检索延迟 | 8.29 ms | 5497.47 ms |
+| 槽位/引用/重复率 | 可评估 | `unsupported` |
+
+查询级证据也不同：
+
+- 标题查询命中 slide 1，并返回 `Observation ID` 与字符范围；标题 case 共记录
+  32 个可追溯引用。
+- `70.1 ms` 查询命中 slide 12，证据同时保留 `1.5 ms / 70.1 ms / 30.6 ms / ~100 ms`
+  的时间分解，`quantitative_result` 为 `supported`。
+- “GeoDose 的机制和结果”沿 lexical、numeric、entity、graph、`zenbrain_prior`
+  五条路线合并召回，命中 slides 5–8 的 DREME/GeoDose 流程证据与 slide 12 的
+  运行时结果，两个必需槽位均为 `supported`。
+- Cognee 2.0 三条查询虽然命中关键词，但每条只返回一段无稳定 Observation/Citation
+  定位的 `graph_context`；其报告因此不能证明槽位完整性或引用可追溯性。
+
+这组结果只说明当前固定 smoke corpus 上的检索与证据工程差异，不代表所有语料或所有
+问题的最终性能；后续应扩展跨讲座、跨领域和歧义问题集，并加入追问准确率与事实冲突率。
+
 ## 11. 实施与迁移策略
 
 3.0 在独立分支和 worktree 中开发，避免影响 OpenClaw 当前使用的 2.0：

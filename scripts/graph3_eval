@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import statistics
 import sys
 import time
@@ -19,6 +20,13 @@ from neurograph3.retrieval import Graph3Retriever
 from neurograph3.store import Graph3Store
 from neurograph3.vector_index import ANNIndex, ANNUnavailable
 from neurograph3.zenbrain import ZenBrainEventLedger
+
+
+def _p95_latency(latencies: list[float]) -> float:
+    """Return the nearest-rank p95, including the max for small samples."""
+    ordered = sorted(latencies)
+    index = min(len(ordered) - 1, max(0, math.ceil(len(ordered) * 0.95) - 1))
+    return ordered[index]
 
 
 def _contains_terms(items: list[str], terms: list[str]) -> dict[str, bool]:
@@ -187,7 +195,7 @@ def main() -> int:
         "passed_cases": sum(result["passed"] for result in results),
         "pass_rate": sum(result["passed"] for result in results) / len(results),
         "mean_latency_ms": statistics.mean(latencies),
-        "p95_latency_ms": sorted(latencies)[min(len(latencies) - 1, max(0, int(len(latencies) * 0.95) - 1))],
+        "p95_latency_ms": _p95_latency(latencies),
         "mean_duplicate_rate": statistics.mean(result["duplicate_rate"] for result in results),
         "citation_traceability_rate": sum(result["all_citations_traceable"] for result in results) / len(results),
         "embedding_enabled": embedder is not None,
