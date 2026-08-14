@@ -35,6 +35,73 @@ class Phase10ANNTests(unittest.TestCase):
                     [{"observation_id": "obs", "model": "fake", "dimensions": 2, "vector": [1.0, 0.0]}]
                 )
 
+    def test_hnswlib_round_trip_when_optional_backend_is_available(self):
+        try:
+            import hnswlib  # noqa: F401
+        except ImportError:
+            self.skipTest("hnswlib is not installed in this environment")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            index_root = Path(temp_dir) / "index"
+            records = [
+                {"observation_id": "obs-a", "model": "fixture", "dimensions": 3, "vector": [1.0, 0.0, 0.0]},
+                {"observation_id": "obs-b", "model": "fixture", "dimensions": 3, "vector": [0.0, 1.0, 0.0]},
+                {"observation_id": "obs-c", "model": "fixture", "dimensions": 3, "vector": [0.0, 0.0, 1.0]},
+            ]
+            metadata = ANNIndex(index_root, backend="hnswlib", ef_search=16).rebuild(records)
+            hits = ANNIndex(index_root, backend="hnswlib", ef_search=16).search([0.95, 0.05, 0.0], limit=2)
+
+            self.assertEqual(metadata["backend"], "hnswlib")
+            self.assertEqual(hits[0]["observation_id"], "obs-a")
+            self.assertGreater(hits[0]["vector_score"], hits[1]["vector_score"])
+
+    def test_hnswlib_integrates_with_retriever_when_optional_backend_is_available(self):
+        try:
+            import hnswlib  # noqa: F401
+        except ImportError:
+            self.skipTest("hnswlib is not installed in this environment")
+
+        class FakeEmbedder:
+            model = "fixture-embedding-v1"
+
+            def embed(self, texts):
+                return [[1.0, 0.0] if "GeoDose" in text else [0.0, 1.0] for text in texts]
+
+        source = """# Talk
+
+## Slide 1
+
+### PPT 视觉提取
+
+GeoDose calculates dose.
+
+## Slide 2
+
+### PPT 视觉提取
+
+DREME reconstructs anatomy.
+"""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            source_path = Path(temp_dir) / "talk.md"
+            source_path.write_text(source, encoding="utf-8")
+            result = ingest_markdown(
+                source_path,
+                storage_root=Path(temp_dir) / "assets",
+                dataset="fixture",
+            )
+            with Graph3Store(Path(temp_dir) / "db") as store:
+                store.put_ingest_result(result)
+                retriever = Graph3Retriever(
+                    store,
+                    embedder=FakeEmbedder(),
+                    vector_index=ANNIndex(Path(temp_dir) / "index", backend="hnswlib"),
+                )
+                retriever.index_vectors()
+                pack = retriever.retrieve("GeoDose", limit=2)
+
+            self.assertEqual(pack.retrieval_trace["vector_backend"], "hnswlib")
+            self.assertTrue(any("vector" in item.retrieval_routes for item in pack.evidence))
+
     def test_retriever_uses_external_index_and_loads_full_evidence_hits(self):
         class FakeEmbedder:
             model = "fake-embedding-v1"
