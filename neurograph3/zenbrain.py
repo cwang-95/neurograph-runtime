@@ -5,7 +5,7 @@ from __future__ import annotations
 import math
 from datetime import datetime, timezone
 from enum import StrEnum
-from typing import Any
+from typing import Any, Sequence
 
 from .store import Graph3Store
 
@@ -39,11 +39,32 @@ class ZenBrainEventLedger:
     citation, feedback, or correction.
     """
 
-    def __init__(self, store: Graph3Store, *, horizon_days: float = 30.0):
+    def __init__(self, store: Graph3Store, *, horizon_days: float = 30.0, fsrs: Any | None = None):
         if horizon_days <= 0:
             raise ValueError("horizon_days must be positive")
         self.store = store
         self.horizon_days = horizon_days
+        self.fsrs = fsrs
+
+    _FSRS_QUALITY: dict[ZenBrainEventType, int] = {
+        ZenBrainEventType.SELECTED: 3,
+        ZenBrainEventType.CITED: 4,
+        ZenBrainEventType.FOLLOWED_UP: 4,
+        ZenBrainEventType.USER_CONFIRMED: 4,
+    }
+
+    def _update_fsrs(self, observation_id: str, event_type: ZenBrainEventType) -> None:
+        if self.fsrs is None or event_type not in self._FSRS_QUALITY:
+            return
+        memory = self.store.get_zenbrain_scheduler("observation", observation_id)
+        if memory is None:
+            memory = self.fsrs.new_memory()
+        updated = self.fsrs.recall(memory, self._FSRS_QUALITY[event_type])
+        self.store.put_zenbrain_scheduler(
+            target_type="observation",
+            target_id=observation_id,
+            scheduler=updated,
+        )
 
     def record_event(
         self,
@@ -56,7 +77,7 @@ class ZenBrainEventLedger:
         created_at: datetime | None = None,
         payload: dict[str, Any] | None = None,
     ) -> str:
-        return self.store.record_zenbrain_event(
+        event_id = self.store.record_zenbrain_event(
             target_type="observation",
             target_id=observation_id,
             observation_id=observation_id,
@@ -67,6 +88,8 @@ class ZenBrainEventLedger:
             created_at=created_at,
             payload=payload,
         )
+        self._update_fsrs(observation_id, event_type)
+        return event_id
 
     def record_pack_event(
         self,
@@ -75,14 +98,41 @@ class ZenBrainEventLedger:
         *,
         caller: str | None = None,
         payload: dict[str, Any] | None = None,
+        observation_ids: Sequence[str] | None = None,
     ) -> int:
         count = 0
         for item in pack.evidence:
+            if observation_ids is not None and item.observation_id not in observation_ids:
+                continue
             self.record_event(
                 item.observation_id,
                 event_type,
                 query=pack.query,
                 caller=caller,
+                payload=payload,
+            )
+            count += 1
+        return count
+
+    def record_feedback(
+        self,
+        observation_ids: Sequence[str],
+        event_type: ZenBrainEventType,
+        *,
+        query: str | None = None,
+        caller: str | None = None,
+        path_id: str | None = None,
+        payload: dict[str, Any] | None = None,
+    ) -> int:
+        """Explicit answer-layer feedback; retrieval never calls this."""
+        count = 0
+        for observation_id in observation_ids:
+            self.record_event(
+                observation_id,
+                event_type,
+                query=query,
+                caller=caller,
+                path_id=path_id,
                 payload=payload,
             )
             count += 1
@@ -107,4 +157,14 @@ class ZenBrainEventLedger:
             age_days = max(0.0, (current - occurred_at).total_seconds() / 86400.0)
             decay = math.exp(-age_days / self.horizon_days)
             scores[event["target_id"]] = scores.get(event["target_id"], 0.0) + _EVENT_WEIGHTS[event_type] * decay
+        if self.fsrs is not None:
+            for observation_id in observation_ids:
+                memory = self.store.get_zenbrain_scheduler("observation", observation_id)
+                if memory is None:
+                    continue
+                try:
+                    retrievability = self.fsrs.decay(memory)
+                except Exception:
+                    continue
+                scores[observation_id] += 0.05 * (retrievability - 0.5)
         return {observation_id: max(-1.0, min(1.0, score)) for observation_id, score in scores.items()}

@@ -1,8 +1,8 @@
 # NeuroGraph 3.0 技术设计
 
-状态：设计基线 v0.2（已完成首轮技术 review；Phase 0–4a 与证据覆盖基础已在 `feature/graph-3.0` 落地，尚未切换 OpenClaw 默认入口）
+状态：设计基线 v0.2（已完成首轮技术 review；Phase 0–5 与证据覆盖基础已在 `feature/graph-3.0` 落地，尚未切换 OpenClaw 默认入口）
 
-当前实现边界：已具备 RawAsset/SourceElement/Observation、Claim/EvidenceLink、保守实体图、显式模式语义关系、多证据关系聚合、DeepSeek 结构化关系候选及严格审核、可控批量构建入口、受 hop/beam/关系白名单约束的多跳图扩展、ZenBrain 追加事件账本与弱先验、多路 lexical/numeric/vector/graph 召回、EvidencePack 槽位覆盖与确定性追问。向量检索当前是可重建的 SQLite brute-force 基线，DeepSeek 只生成候选，不直接改变权威事实；ZenBrain 的完整 FSRS/巩固适配器和 ANN 索引尚未接入。
+当前实现边界：已具备 RawAsset/SourceElement/Observation、Claim/EvidenceLink、保守实体图、显式模式语义关系、多证据关系聚合、DeepSeek 结构化关系候选及严格审核、可控批量构建入口、受 hop/beam/关系白名单约束的多跳图扩展、ZenBrain 追加事件账本与弱先验、多路 lexical/numeric/vector/graph 召回、EvidencePack 槽位覆盖与确定性追问、现有 ZenBrain FSRS 调度器适配及显式回答反馈接口。向量检索当前是可重建的 SQLite brute-force 基线，DeepSeek 只生成候选，不直接改变权威事实；边状态、路径状态和 ANN 索引仍未接入。
 
 ## 1. 目标、原则与边界
 
@@ -50,6 +50,12 @@ ClaimVersion 同时组成可版本化的 TopicUnit / KnowledgeUnit
   → Codex / OpenClaw / 独立回答模型
 
 ZenBrain Event Ledger 横向记录检索、采用、引用、确认和纠错事件
+
+3.0 通过 `NodeZenBrainFSRS` 调用 OpenClaw 现有的
+`@zensation/algorithms`，将观察节点的 FSRS 状态保存到 SQLite。检索只读
+`retrievability`，不会产生强化；`selected`、`cited`、`followed_up` 和
+`user_confirmed` 必须由回答层显式回写，才会更新 FSRS。`corrected` 与
+`rejected` 只影响事件先验，不触发 recall。
 ```
 
 权威数据保存在结构化元数据与事件账本中。向量索引、BM25 索引、图投影、摘要和缓存都是可重建的派生视图。
@@ -456,7 +462,7 @@ rejected           被判无关或错误，不强化或降权
 
 ZenBrain 分别维护：
 
-- 节点状态：Claim、Entity、TopicUnit 的可检索性；
+- 节点状态：当前实现先维护 Observation 的 FSRS 可检索性，后续扩展到 Claim、Entity、TopicUnit；
 - 边状态：关系在不同问题类型下的有效性；
 - 路径状态：被证据支持并实际帮助回答的路径；
 - 用户上下文：用户近期关注方向，但不改变事实可信度；
@@ -472,6 +478,20 @@ ZenBrain 分别维护：
 - ZenBrain 开启后不得降低冷事实回归集的召回率超过验收阈值。
 
 当前 2.0 的 `boost()` 在“被召回”时立即强化，且默认 graph-evidence 不经过 boost。3.0 不复用该行为，只将现有状态作为可选迁移数据，并默认从新的事件账本重新计分。
+
+回答层反馈接口必须显式调用：
+
+```python
+ledger.record_feedback(
+    observation_ids,
+    ZenBrainEventType.CITED,
+    query=query,
+    caller="answer-layer",
+)
+```
+
+`record_feedback` 不是检索函数的一部分。若只调用 `retrieve()`，事件数和
+FSRS 节点状态都不增加；这条约束纳入回归测试。
 
 ## 10. 存储与工程实现
 
@@ -538,7 +558,15 @@ ZenBrain 分别维护：
 - 用户反馈与纠错传播；
 - 与禁用 ZenBrain 的基线进行消融测试。
 
-### Phase 5：迁移与切换
+### Phase 5：FSRS 与回答反馈
+
+- 接入现有 `@zensation/algorithms` FSRS，保存 Observation 节点状态；
+- 将可检索性作为弱先验，不改变事实相关性、证据质量和槽位覆盖判断；
+- 提供 `selected/cited/followed_up/user_confirmed/corrected/rejected` 的回答层显式事件接口；
+- 验证检索不会隐式强化，反馈才会改变 FSRS 状态；
+- 后续再扩展边、路径和用户上下文的调度状态。
+
+### Phase 6：迁移与切换
 
 - 从 Cognee 2.0 导入候选实体、关系和文本引用；
 - 所有导入内容重新绑定 SourceElement 和 EvidenceLink；

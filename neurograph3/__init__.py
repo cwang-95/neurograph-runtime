@@ -23,6 +23,7 @@ from .llm_relations import (
 )
 from .pipeline import GraphBuildStats, build_relation_graph, ingest_and_build_graph
 from .zenbrain import ZenBrainEventLedger, ZenBrainEventType
+from .fsrs import FSRSAdapterError, NodeZenBrainFSRS
 
 __all__ = [
     "ClaimVersion",
@@ -53,4 +54,6 @@ __all__ = [
     "ingest_and_build_graph",
     "ZenBrainEventLedger",
     "ZenBrainEventType",
+    "FSRSAdapterError",
+    "NodeZenBrainFSRS",
 ]
