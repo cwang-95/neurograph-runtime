@@ -1,0 +1,57 @@
+import importlib.util
+import json
+import subprocess
+import tempfile
+import unittest
+from pathlib import Path
+from importlib.machinery import SourceFileLoader
+
+
+def load_script(name: str):
+    path = Path(__file__).resolve().parent.parent / "scripts" / name
+    spec = importlib.util.spec_from_loader(name, SourceFileLoader(name, str(path)))
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+    return module
+
+
+class Phase16BaselineAdapterTests(unittest.TestCase):
+    def test_cognee_adapter_parses_pretty_json_after_logs(self):
+        adapter = load_script("cognee_eval")
+        payload = {"mode": "graph-evidence", "query": "q", "graph_context": ["70.1 ms"]}
+        stdout = "log line\nwarning {not json}\n" + json.dumps(payload, indent=2)
+        self.assertEqual(adapter._parse_payload(stdout), payload)
+
+    def test_ab_compare_marks_reports_non_comparable_without_corpus_match(self):
+        compare = load_script("graph3_ab_compare")
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            graph3 = root / "graph3.json"
+            baseline = root / "baseline.json"
+            graph3.write_text(
+                json.dumps({"corpus_label": "aapm", "pass_rate": 1.0, "mean_latency_ms": 2.0, "p95_latency_ms": 3.0}),
+                encoding="utf-8",
+            )
+            baseline.write_text(
+                json.dumps({"corpus_label": "wiki", "pass_rate": 0.0, "mean_latency_ms": 5.0, "p95_latency_ms": 6.0}),
+                encoding="utf-8",
+            )
+            report = json.loads(
+                subprocess.check_output(
+                    [
+                        str(Path(__file__).resolve().parent.parent / "scripts" / "graph3_ab_compare"),
+                        "--graph3-report",
+                        str(graph3),
+                        "--baseline-report",
+                        str(baseline),
+                    ],
+                    text=True,
+                )
+            )
+            self.assertFalse(report["comparable"])
+            self.assertIsNone(report["delta_graph3_minus_baseline"])
+
+
+if __name__ == "__main__":
+    unittest.main()
