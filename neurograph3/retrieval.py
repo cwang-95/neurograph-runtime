@@ -62,7 +62,7 @@ class QueryPlan(BaseModel):
         query_types = ["exact_fact", "quantitative_result"] if re.search(r"\d", query) else ["exploratory"]
         if any(word in lowered for word in ("方法", "流程", "机制", "怎么")):
             query_types.append("mechanism")
-        if any(word in lowered for word in ("结果", "效果", "指标", "准确", "性能")):
+        if any(word in lowered for word in ("结果", "效果", "指标", "准确", "性能", "时间", "耗时", "速度", "runtime", "latency", "ms")):
             query_types.append("quantitative_result")
         if any(word in lowered for word in ("比较", "对比", "区别", "优劣")):
             query_types.append("comparison")
@@ -343,6 +343,16 @@ class Graph3Retriever:
         if entity_ids or not evidence:
             return None
         lowered = query.casefold()
+        explicit_terms = {
+            term
+            for term in re.findall(r"[a-z][a-z0-9-]{2,}", lowered)
+            if term not in {"the", "and", "for", "with"}
+        }
+        if len(explicit_terms) >= 3 and any(
+            sum(term in item.value.casefold() for term in explicit_terms) >= 3
+            for item in evidence
+        ):
+            return None
         reference_markers = ("这个", "该", "它", "此方法", "这个方法", "the method", "it")
         target_markers = ("方法", "机制", "结果", "效果", "性能", "怎么", "流程")
         overview_markers = ("概览", "概述", "有哪些", "全貌", "综述", "整体")
