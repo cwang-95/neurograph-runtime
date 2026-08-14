@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import json
 import re
 import sqlite3
@@ -108,6 +109,13 @@ class Graph3Store:
                 payload_json TEXT NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS observation_embeddings (
+                observation_id TEXT PRIMARY KEY REFERENCES observations(observation_id),
+                model TEXT NOT NULL,
+                dimensions INTEGER NOT NULL,
+                vector_json TEXT NOT NULL
+            );
+
             CREATE VIRTUAL TABLE IF NOT EXISTS observation_fts USING fts5(
                 observation_id UNINDEXED,
                 value,
@@ -186,8 +194,72 @@ class Graph3Store:
     def counts(self) -> dict[str, int]:
         return {
             table: int(self.connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])
-            for table in ("raw_assets", "source_elements", "observations", "claim_versions", "evidence_links", "entities", "relations")
+            for table in ("raw_assets", "source_elements", "observations", "claim_versions", "evidence_links", "entities", "relations", "observation_embeddings")
         }
+
+    def list_observations(self) -> list[dict[str, Any]]:
+        rows = self.connection.execute(
+            "SELECT observation_id, value FROM observations ORDER BY observation_id"
+        ).fetchall()
+        return [{"observation_id": row["observation_id"], "value": row["value"]} for row in rows]
+
+    def put_embeddings(self, model: str, embeddings: dict[str, list[float]]) -> None:
+        with self.connection:
+            for observation_id, vector in embeddings.items():
+                self.connection.execute(
+                    """
+                    INSERT INTO observation_embeddings(observation_id, model, dimensions, vector_json)
+                    VALUES (?, ?, ?, ?)
+                    ON CONFLICT(observation_id) DO UPDATE SET
+                        model=excluded.model,
+                        dimensions=excluded.dimensions,
+                        vector_json=excluded.vector_json
+                    """,
+                    (observation_id, model, len(vector), json.dumps(vector, separators=(",", ":"))),
+                )
+
+    def search_vector(self, query_vector: list[float], limit: int = 20) -> list[dict[str, Any]]:
+        rows = self.connection.execute(
+            """
+            SELECT e.observation_id, e.vector_json, o.*, s.locator_json,
+                   s.asset_id, s.element_type
+            FROM observation_embeddings e
+            JOIN observations o ON o.observation_id = e.observation_id
+            JOIN source_elements s ON s.element_id = o.element_id
+            """
+        ).fetchall()
+        query_norm = math.sqrt(sum(value * value for value in query_vector))
+        if query_norm == 0:
+            return []
+        hits: list[dict[str, Any]] = []
+        for row in rows:
+            vector = json.loads(row["vector_json"])
+            if len(vector) != len(query_vector):
+                continue
+            norm = math.sqrt(sum(value * value for value in vector))
+            if norm == 0:
+                continue
+            score = sum(a * b for a, b in zip(query_vector, vector)) / (query_norm * norm)
+            hits.append(self._observation_hit(row, vector_score=score))
+        hits.sort(key=lambda item: item["vector_score"], reverse=True)
+        return hits[:limit]
+
+    def _observation_hit(self, row: sqlite3.Row, **scores: float) -> dict[str, Any]:
+        hit = {
+            "observation_id": row["observation_id"],
+            "element_id": row["element_id"],
+            "aligned_element_ids": json.loads(row["aligned_element_ids_json"]),
+            "kind": row["kind"],
+            "value": row["value"],
+            "asset_id": row["asset_id"],
+            "element_type": row["element_type"],
+            "locator": json.loads(row["locator_json"]),
+            "matched_terms": 0,
+            "matched_numbers": 0,
+            "lexical_score": 0.0,
+        }
+        hit.update(scores)
+        return hit
 
     def put_claims(self, claims: list[tuple[ClaimVersion, EvidenceLink]]) -> None:
         """Persist candidate claims and their observation links idempotently."""
@@ -264,6 +336,105 @@ class Graph3Store:
                         json.dumps(relation.model_dump(mode="json"), ensure_ascii=False, sort_keys=True),
                     ),
                 )
+
+    def search_entities(self, query: str, limit: int = 20) -> list[dict[str, Any]]:
+        tokens = [token for token in re.findall(r"[A-Za-z0-9_-]+|[\u4e00-\u9fff]+", query.casefold()) if len(token) > 1]
+        if not tokens:
+            return []
+        clauses = " OR ".join("lower(canonical_name) LIKE ? OR lower(aliases_json) LIKE ?" for _ in tokens)
+        params: list[str | int] = []
+        for token in tokens:
+            params.extend((f"%{token}%", f"%{token}%"))
+        params.append(limit)
+        rows = self.connection.execute(
+            f"""
+            SELECT entity_id, canonical_name, entity_type, aliases_json
+            FROM entities
+            WHERE {clauses}
+            LIMIT ?
+            """,
+            params,
+        ).fetchall()
+        return [
+            {
+                "entity_id": row["entity_id"],
+                "canonical_name": row["canonical_name"],
+                "entity_type": row["entity_type"],
+                "aliases": json.loads(row["aliases_json"]),
+            }
+            for row in rows
+        ]
+
+    def observation_hits(self, observation_ids: list[str]) -> list[dict[str, Any]]:
+        if not observation_ids:
+            return []
+        placeholders = ",".join("?" for _ in observation_ids)
+        rows = self.connection.execute(
+            f"""
+            SELECT o.*, s.locator_json, s.asset_id, s.element_type
+            FROM observations o
+            JOIN source_elements s ON s.element_id = o.element_id
+            WHERE o.observation_id IN ({placeholders})
+            """,
+            observation_ids,
+        ).fetchall()
+        return [self._observation_hit(row) for row in rows]
+
+    def expand_graph(
+        self,
+        entity_ids: list[str],
+        *,
+        max_hops: int = 1,
+        allowed_predicates: tuple[str, ...] = ("co_occurs_in_observation",),
+    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+        """Expand only typed edges and return paths plus observation hits."""
+        if max_hops < 1 or not entity_ids:
+            return [], []
+        allowed = set(allowed_predicates)
+        frontier = set(entity_ids)
+        visited = set(frontier)
+        paths: list[dict[str, Any]] = []
+        observation_ids: set[str] = set()
+        for hop in range(1, max_hops + 1):
+            rows = self.connection.execute(
+                """
+                SELECT r.*, se.canonical_name AS source_name, te.canonical_name AS target_name
+                FROM relations r
+                JOIN entities se ON se.entity_id = r.source_entity_id
+                JOIN entities te ON te.entity_id = r.target_entity_id
+                """
+            ).fetchall()
+            next_frontier: set[str] = set()
+            for row in rows:
+                if row["predicate"] not in allowed:
+                    continue
+                source_id, target_id = row["source_entity_id"], row["target_entity_id"]
+                if source_id not in frontier and target_id not in frontier:
+                    continue
+                other_id = target_id if source_id in frontier else source_id
+                if other_id in visited and other_id not in frontier:
+                    continue
+                ids = json.loads(row["observation_ids_json"])
+                observation_ids.update(ids)
+                paths.append(
+                    {
+                        "hop": hop,
+                        "source_entity_id": source_id,
+                        "source_name": row["source_name"],
+                        "predicate": row["predicate"],
+                        "target_entity_id": target_id,
+                        "target_name": row["target_name"],
+                        "observation_ids": ids,
+                        "confidence": row["confidence"],
+                    }
+                )
+                next_frontier.add(other_id)
+            if not next_frontier:
+                break
+            visited.update(next_frontier)
+            frontier = next_frontier
+        return paths, self.observation_hits(sorted(observation_ids))
+
     def search_lexical(self, query: str, limit: int = 20) -> list[dict[str, Any]]:
         """Search exact terms and numbers, returning source-aware hits."""
         if limit < 1:
@@ -313,20 +484,7 @@ class Graph3Store:
             matched_terms = sum(token in lowered for token in tokens if token)
             matched_numbers = sum(number.casefold() in lowered for number in numeric_tokens)
             score = float(matched_terms) + float(matched_numbers * 2)
-            scored.append(
-                {
-                    "observation_id": row["observation_id"],
-                    "element_id": row["element_id"],
-                    "aligned_element_ids": json.loads(row["aligned_element_ids_json"]),
-                    "kind": row["kind"],
-                    "value": value,
-                    "asset_id": row["asset_id"],
-                    "element_type": row["element_type"],
-                    "locator": json.loads(row["locator_json"]),
-                    "matched_terms": matched_terms,
-                    "matched_numbers": matched_numbers,
-                    "lexical_score": score,
-                }
-            )
+            hit = self._observation_hit(row, matched_terms=matched_terms, matched_numbers=matched_numbers, lexical_score=score)
+            scored.append(hit)
         scored.sort(key=lambda item: (item["matched_numbers"], item["lexical_score"]), reverse=True)
         return scored[:limit]
