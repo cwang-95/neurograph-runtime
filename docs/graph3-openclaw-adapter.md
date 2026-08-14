@@ -42,3 +42,11 @@ scripts/kb_search "GeoDose 的机制和结果" 6 --answer-draft --json
 Graph 3.0 仍不接管旧的 `--answer` 模式，避免和上层 DeepSeek 重复生成答案；需要
 确定性回答草稿时使用新增的 `--answer-draft`。取消 `NEUROGRAPH_BACKEND=graph3`
 即可回滚到 Cognee。
+
+接入前可运行灰度冒烟检查，不修改稳定配置：
+
+```bash
+scripts/graph3_adapter_smoke
+```
+
+它会实际验证 AnswerDraft、EvidencePack、追问、重复回答保护和环境变量回滚路径。
