@@ -397,6 +397,12 @@ EvidencePack 是 Codex、OpenClaw 或独立回答模型消费的稳定接口，�
 `context_of_observation_ids`，并进入可定位 citations，便于回答层补全流程和
 前后条件。
 
+跨文档完全重复的 Observation 按稳定 `duplicate_group_id` 合并：最高相关性
+和来源质量的 Observation 作为主代表，其余来源写入
+`supporting_observation_ids`、`supporting_citations`，不会被静默丢弃。来源质量
+目前由 Observation 类型和 extractor confidence 计算为可解释的 0–1 分数，
+只作为轻量排序项，不能覆盖当前问题相关性或证据槽位覆盖。
+
 上下文组装规则：
 
 - 数字、单位、条件、限制和否定句尽量保留原文；
