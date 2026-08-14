@@ -14,6 +14,13 @@ from .extract import extract_numeric_claims
 from .entities import extract_cooccurrence_relations, extract_entities, extract_semantic_relations
 from .models import Entity, Relation
 from .embedding import OpenAICompatibleEmbedder
+from .llm_relations import (
+    DeepSeekRelationClient,
+    RelationExtractionResult,
+    RelationProposal,
+    RelationRejection,
+    validate_relation_proposals,
+)
 
 __all__ = [
     "ClaimVersion",
@@ -34,4 +41,9 @@ __all__ = [
     "extract_cooccurrence_relations",
     "extract_semantic_relations",
     "OpenAICompatibleEmbedder",
+    "DeepSeekRelationClient",
+    "RelationExtractionResult",
+    "RelationProposal",
+    "RelationRejection",
+    "validate_relation_proposals",
 ]

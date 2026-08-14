@@ -318,6 +318,7 @@ class Graph3Store:
                         json.dumps(entity.model_dump(mode="json"), ensure_ascii=False, sort_keys=True),
                     ),
                 )
+
             for relation in relations:
                 existing = self.connection.execute(
                     "SELECT observation_ids_json, confidence FROM relations WHERE relation_id = ?",
@@ -363,6 +364,12 @@ class Graph3Store:
                         relation.relation_id,
                     ),
                 )
+
+    def put_relation_extraction_results(self, entities: list[Entity], results: list[Any]) -> int:
+        """Persist only validated relation results; rejected proposals never enter the graph."""
+        accepted = [relation for result in results for relation in result.accepted]
+        self.put_graph(entities, accepted)
+        return len(accepted)
 
     def search_entities(self, query: str, limit: int = 20) -> list[dict[str, Any]]:
         if limit < 1:

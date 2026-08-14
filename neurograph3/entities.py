@@ -82,6 +82,8 @@ _SEMANTIC_RELATION_RULES: tuple[tuple[str, str, float], ...] = (
     ("reconstructs", r"\breconstruct(?:s|ed)?\b|\b重建\b|\b重构\b", 0.76),
 )
 
+SEMANTIC_RELATION_PREDICATES = frozenset(rule[0] for rule in _SEMANTIC_RELATION_RULES)
+
 
 def _entity_mentions(text: str) -> list[tuple[int, int, str]]:
     """Return de-duplicated entity spans in source order."""
