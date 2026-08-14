@@ -292,6 +292,34 @@ GeoDose dose accumulation takes 70.1 ms.
                 ],
             )
 
+    def test_lexical_query_adds_bilingual_seed_terms_without_embedding(self):
+        source = """# Talk
+
+## Slide 1
+
+### PPT 视觉提取
+
+Adaptive radiotherapy workflow uses online adaptation and treatment delivery.
+"""
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            source_path = Path(temp_dir) / "talk.md"
+            source_path.write_text(source, encoding="utf-8")
+            result = ingest_markdown(source_path, storage_root=Path(temp_dir) / "assets", dataset="fixture")
+            with Graph3Store(Path(temp_dir) / "db") as store:
+                store.put_ingest_result(result)
+                pack = Graph3Retriever(store).retrieve("在线自适应放疗的工作流", limit=5)
+
+            self.assertTrue(pack.evidence)
+            self.assertIn("adaptive radiotherapy", pack.evidence[0].value.casefold())
+            self.assertEqual(
+                pack.retrieval_trace["query_expansions"],
+                [
+                    "online adaptive radiotherapy",
+                    "workflow framework process",
+                ],
+            )
+
 
 if __name__ == "__main__":
     unittest.main()
