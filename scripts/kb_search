@@ -1,7 +1,7 @@
 #!/bin/bash
 # ============================================================
 # kb_search — 知识图谱自动检索工具(自动感知的"第一查")
-# 用法: kb_search "查询内容" [topN] [--answer|--graph-evidence|--evidence] [--json]
+# 用法: kb_search "查询内容" [topN] [--answer|--answer-draft|--graph-evidence|--evidence] [--json]
 #   查询内容:  必填
 #   topN:      可选, 返回几条(默认4)
 #   --memory:  查记忆域(memory_rag, 私有经历)
@@ -35,6 +35,7 @@ for a in "${@:2}"; do
     --all)    DATASETS="wiki_full,github_projects" ;;
     --evidence|--chunks) MODE="evidence" ;;
     --graph-evidence) MODE="graph-evidence" ;;
+    --answer-draft) MODE="answer-draft" ;;
     --answer) MODE="answer" ;;
     --json) FORMAT="json" ;;
     *) echo "未知参数: $a" >&2; exit 2 ;;
@@ -45,7 +46,7 @@ DSKEY=$(python3 -c "import json,os; print(json.load(open(os.path.expanduser('~/.
 export DASHSCOPE_API_KEY="$DSKEY"
 
 if [[ -z "$Q" ]]; then
-  echo "用法: kb_search \"查询内容\" [topN] [--answer|--graph-evidence|--evidence] [--json]"
+  echo "用法: kb_search \"查询内容\" [topN] [--answer|--answer-draft|--graph-evidence|--evidence] [--json]"
   exit 1
 fi
 
@@ -54,8 +55,14 @@ if [[ "${NEUROGRAPH_BACKEND:-cognee}" == "graph3" && "$DOMAIN" != "memory" ]]; t
   GRAPH3_ROOT="${NEUROGRAPH_GRAPH3_ROOT:-/Users/wangcheng/Projects/neurograph-graph-3.0}"
   GRAPH3_STORAGE="${NEUROGRAPH_GRAPH3_STORAGE:-$GRAPH3_ROOT/data/graph3}"
   GRAPH3_QUERY="$GRAPH3_ROOT/scripts/graph3_query"
-  if [[ ! -x "$GRAPH3_QUERY" ]]; then
-    echo "Graph 3.0 查询入口不存在或不可执行: $GRAPH3_QUERY" >&2
+  GRAPH3_ANSWER="$GRAPH3_ROOT/scripts/graph3_answer"
+  if [[ "$MODE" == "answer-draft" ]]; then
+    GRAPH3_ENTRY="$GRAPH3_ANSWER"
+  else
+    GRAPH3_ENTRY="$GRAPH3_QUERY"
+  fi
+  if [[ ! -x "$GRAPH3_ENTRY" ]]; then
+    echo "Graph 3.0 查询入口不存在或不可执行: $GRAPH3_ENTRY" >&2
     exit 2
   fi
   GRAPH3_ARGS=("$Q" --storage-root "$GRAPH3_STORAGE" --top "$TOP")
@@ -66,7 +73,10 @@ if [[ "${NEUROGRAPH_BACKEND:-cognee}" == "graph3" && "$DOMAIN" != "memory" ]]; t
     echo "Graph 3.0 后端当前只返回 EvidencePack；请使用 --graph-evidence，由上层模型回答。" >&2
     exit 2
   fi
-  exec ~/.cognee-venv/bin/python -u "$GRAPH3_QUERY" "${GRAPH3_ARGS[@]}"
+  if [[ "$MODE" == "answer-draft" ]]; then
+    GRAPH3_ARGS+=(--max-items "$TOP")
+  fi
+  exec ~/.cognee-venv/bin/python -u "$GRAPH3_ENTRY" "${GRAPH3_ARGS[@]}"
 fi
 
 if [[ "$DOMAIN" == "memory" ]]; then

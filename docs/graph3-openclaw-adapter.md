@@ -24,6 +24,21 @@ ID 通过 `scripts/graph3_feedback` 回写。需要读取 FSRS 弱先验时增�
 NEUROGRAPH_GRAPH3_FSRS=1
 ```
 
+如果调用方需要一个不调用 DeepSeek 的确定性回答草稿，可显式使用：
+
+```bash
+NEUROGRAPH_BACKEND=graph3 \
+NEUROGRAPH_GRAPH3_ROOT=/Users/wangcheng/Projects/neurograph-graph-3.0 \
+NEUROGRAPH_GRAPH3_STORAGE=/Users/wangcheng/Projects/neurograph-graph-3.0/data/graph3 \
+scripts/kb_search "GeoDose 的机制和结果" 6 --answer-draft --json
+```
+
+该模式返回 `AnswerDraft`，状态为 `answer`、`follow_up` 或 `conflict`，并附带按
+机制/量化结果分组的证据、Observation ID 和原始定位。它只组装 EvidencePack，
+不生成新的事实；上层模型若继续润色，也只能使用返回的证据和 citations。
+
 回滚只需取消 `NEUROGRAPH_BACKEND=graph3`，无需修改 OpenClaw 稳定配置。
 
-该适配暂不支持 `--answer`，避免 Graph 3.0 后端和上层 DeepSeek 重复生成答案。
+Graph 3.0 仍不接管旧的 `--answer` 模式，避免和上层 DeepSeek 重复生成答案；需要
+确定性回答草稿时使用新增的 `--answer-draft`。取消 `NEUROGRAPH_BACKEND=graph3`
+即可回滚到 Cognee。
