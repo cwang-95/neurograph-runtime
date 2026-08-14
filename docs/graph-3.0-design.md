@@ -2,7 +2,7 @@
 
 状态：设计基线 v0.2（已完成首轮技术 review；Phase 0–5 与证据覆盖基础已在 `feature/graph-3.0` 落地，尚未切换 OpenClaw 默认入口）
 
-当前实现边界：已具备 RawAsset/SourceElement/Observation、Claim/EvidenceLink、保守实体图、显式模式语义关系、多证据关系聚合、DeepSeek 结构化关系候选及严格审核、可控批量构建入口、受 hop/beam/关系白名单约束的多跳图扩展、ZenBrain 追加事件账本与弱先验、多路 lexical/numeric/vector/graph 召回、EvidencePack 槽位覆盖与确定性追问、现有 ZenBrain FSRS 调度器适配、Observation/ClaimVersion/Relation/Path 显式回答反馈接口、ClaimVersion 抑制与冲突投影、Codex/OpenClaw 通用反馈协议与 CLI。向量检索当前是可重建的 SQLite brute-force 基线，DeepSeek 只生成候选，不直接改变权威事实；边/路径/Claim 目前使用事件弱先验，尚未有独立 FSRS 状态，ANN 索引仍未接入。
+当前实现边界：已具备 RawAsset/SourceElement/Observation、Claim/EvidenceLink、保守实体图、显式模式语义关系、多证据关系聚合、DeepSeek 结构化关系候选及严格审核、可控批量构建入口、受 hop/beam/关系白名单约束的多跳图扩展、ZenBrain 追加事件账本与弱先验、多路 lexical/numeric/vector/graph 召回、EvidencePack 槽位覆盖与确定性追问、现有 ZenBrain FSRS 调度器适配、Observation/ClaimVersion/Relation/Path 显式回答反馈接口、ClaimVersion 抑制与冲突投影、Codex/OpenClaw 通用反馈协议与 CLI。向量检索默认是可重建的 SQLite brute-force 基线，也已接入可选 HNSW/FAISS 派生索引及自动回退；DeepSeek 只生成候选，不直接改变权威事实；边/路径/Claim 目前使用事件弱先验，尚未有独立 FSRS 状态。
 
 ## 1. 目标、原则与边界
 
@@ -530,6 +530,11 @@ AnswerFeedbackRecorder(store, ledger).record(request)
 ```bash
 scripts/graph3_query "自适应放疗的实时计划流程" \
   --storage-root data/graph3 > evidence-pack.json
+# 启用本地 embedding；若 ANN 索引不可用，retrieval_trace 会记录 SQLite 回退
+scripts/graph3_query "自适应放疗的实时计划流程" \
+  --storage-root data/graph3 \
+  --embedding-endpoint http://127.0.0.1:8000/v1/embeddings \
+  --ann-index data/graph3/vector_index > evidence-pack.json
 # 回答层从 evidence-pack.json 选择实际引用的 ID 后提交反馈
 printf '%s' '<反馈 JSON>' | scripts/graph3_feedback \
   --storage-root data/graph3
@@ -543,7 +548,7 @@ printf '%s' '<反馈 JSON>' | scripts/graph3_feedback \
 首版建议：
 
 - SQLite：权威元数据、版本、EvidenceLink、事件账本和任务状态；
-- LanceDB：可重建的向量索引；
+- 可选 HNSW/FAISS：可重建的向量索引；SQLite 保留为无额外依赖的精确回退；
 - SQLite FTS5 或独立 BM25：关键词与精确文本检索；
 - NetworkX：早期图算法验证；数据量和并发达到瓶颈后再评估 Ladybug 或图数据库；
 - 原始文件目录：内容寻址、只读保存；
@@ -574,6 +579,22 @@ scripts/graph3_rebuild /path/to/markdown-dir \
 重建按内容地址和稳定 ID 幂等，可重复执行；报告区分 Observation、Claim、
 EvidenceLink、实体、确定性关系和 DeepSeek 调用预算。当前向量索引仍需单独
 执行可重建的 embedding/index 步骤。
+
+可选 ANN 索引入口：
+
+```bash
+# 从 SQLite 权威向量表重建 HNSW/FAISS 索引；默认位置为 storage-root/vector_index
+scripts/graph3_vector_index --storage-root data/graph3
+
+# 指定后端或索引目录
+scripts/graph3_vector_index --storage-root data/graph3 \
+  --index-root data/graph3/vector_index --backend hnswlib
+```
+
+ANN 后端是可选依赖，当前环境未安装时命令会明确返回不可用，在线检索仍回退
+到 SQLite 精确余弦搜索。`ANNIndex` 只保存向量和 Observation ID 映射，不替代
+SQLite；索引损坏、缺失、模型不一致或维度不一致时必须重新构建。安装
+`hnswlib` 或 `faiss-cpu` 后再执行重建，不应把不同 embedding 模型混入同一索引。
 
 ## 11. 实施与迁移策略
 

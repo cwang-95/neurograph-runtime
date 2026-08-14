@@ -1,0 +1,40 @@
+#!/usr/bin/env python3
+"""Rebuild the optional Graph 3.0 ANN index from SQLite embeddings."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(HERE))
+
+from neurograph3.store import Graph3Store
+from neurograph3.vector_index import ANNIndex, ANNUnavailable
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Rebuild the optional Graph 3.0 ANN index")
+    parser.add_argument("--storage-root", type=Path, default=HERE / "data" / "graph3")
+    parser.add_argument("--index-root", type=Path)
+    parser.add_argument("--backend", choices=("auto", "hnswlib", "faiss"), default="auto")
+    parser.add_argument("--ef-search", type=int, default=64)
+    args = parser.parse_args()
+
+    index_root = args.index_root or args.storage_root / "vector_index"
+    try:
+        with Graph3Store(args.storage_root) as store:
+            records = store.list_embedding_records()
+        index = ANNIndex(index_root, backend=args.backend, ef_search=args.ef_search)
+        metadata = index.rebuild(records)
+    except (ANNUnavailable, ValueError) as exc:
+        print(json.dumps({"error": str(exc), "index_root": str(index_root)}, ensure_ascii=False))
+        return 2
+    print(json.dumps({"index_root": str(index_root), **metadata}, ensure_ascii=False, indent=2))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
