@@ -1,0 +1,76 @@
+#!/bin/bash
+# Validate the reversible Graph 3.0 adapter routes without changing stable config.
+set -euo pipefail
+
+ADAPTER_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+ADAPTER="$ADAPTER_ROOT/scripts/kb_search"
+GRAPH3_ROOT="${NEUROGRAPH_GRAPH3_ROOT:-/Users/wangcheng/Projects/neurograph-graph-3.0}"
+GRAPH3_STORAGE="${NEUROGRAPH_GRAPH3_STORAGE:-$GRAPH3_ROOT/data/graph3}"
+QUERY="${NEUROGRAPH_SMOKE_QUERY:-GeoDose 的机制和结果}"
+FOLLOW_UP_QUERY="${NEUROGRAPH_SMOKE_FOLLOW_UP_QUERY:-这个方法的效果如何？}"
+PYTHON_BIN="${NEUROGRAPH_PYTHON:-$HOME/.cognee-venv/bin/python}"
+
+if [[ ! -x "$ADAPTER" || ! -x "$GRAPH3_ROOT/scripts/graph3_query" || ! -x "$GRAPH3_ROOT/scripts/graph3_answer" ]]; then
+  echo "adapter 或 Graph 3.0 入口不存在/不可执行" >&2
+  exit 2
+fi
+if [[ ! -x "$PYTHON_BIN" ]]; then
+  echo "Python 环境不存在: $PYTHON_BIN" >&2
+  exit 2
+fi
+
+TMP_ROOT="$(mktemp -d /tmp/neurograph-graph3-adapter-smoke.XXXXXX)"
+trap 'rm -rf "$TMP_ROOT"' EXIT
+export NEUROGRAPH_BACKEND=graph3
+export NEUROGRAPH_GRAPH3_ROOT="$GRAPH3_ROOT"
+export NEUROGRAPH_GRAPH3_STORAGE="$GRAPH3_STORAGE"
+
+echo "[1/5] AnswerDraft route"
+"$ADAPTER" "$QUERY" 6 --answer-draft --json > "$TMP_ROOT/answer.json"
+"$PYTHON_BIN" - "$TMP_ROOT/answer.json" <<'PY'
+import json
+import sys
+
+payload = json.load(open(sys.argv[1], encoding="utf-8"))
+assert payload["status"] in {"answer", "follow_up", "conflict"}
+assert payload["citations"] or payload["status"] == "follow_up"
+assert payload["used_observation_ids"] or payload["status"] == "follow_up"
+print(f"  status={payload['status']} citations={len(payload['citations'])}")
+PY
+
+echo "[2/5] EvidencePack route"
+"$ADAPTER" "$QUERY" 3 --graph-evidence --json > "$TMP_ROOT/evidence.json"
+"$PYTHON_BIN" - "$TMP_ROOT/evidence.json" <<'PY'
+import json
+import sys
+
+payload = json.load(open(sys.argv[1], encoding="utf-8"))
+assert "evidence" in payload and "citations" in payload
+print(f"  evidence={len(payload['evidence'])} citations={len(payload['citations'])}")
+PY
+
+echo "[3/5] Follow-up route"
+"$ADAPTER" "$FOLLOW_UP_QUERY" 6 --answer-draft --json > "$TMP_ROOT/follow-up.json"
+"$PYTHON_BIN" - "$TMP_ROOT/follow-up.json" <<'PY'
+import json
+import sys
+
+payload = json.load(open(sys.argv[1], encoding="utf-8"))
+assert payload["status"] == "follow_up"
+assert payload["follow_up_questions"]
+assert not payload["used_observation_ids"]
+print(f"  status={payload['status']} questions={len(payload['follow_up_questions'])}")
+PY
+
+echo "[4/5] Duplicate-answer guard"
+if "$ADAPTER" "$QUERY" 3 --answer >/dev/null 2>"$TMP_ROOT/answer.err"; then
+  echo "旧 --answer 路由不应在 Graph 3.0 后端执行" >&2
+  exit 1
+fi
+grep -q "避免.*DeepSeek\|EvidencePack" "$TMP_ROOT/answer.err"
+echo "  legacy --answer rejected"
+
+echo "[5/5] Rollback switch"
+env -u NEUROGRAPH_BACKEND bash -c '[[ "${NEUROGRAPH_BACKEND:-cognee}" == "cognee" ]]'
+echo "  unset NEUROGRAPH_BACKEND => cognee"
+echo "Graph 3.0 adapter smoke passed"
