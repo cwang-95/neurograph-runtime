@@ -260,6 +260,38 @@ GeoDose dose accumulation takes 70.1 ms.
             self.assertIn("quantitative_result", pack.slot_status)
             self.assertEqual(pack.slot_status["quantitative_result"], SlotStatus.SUPPORTED)
 
+    def test_vector_query_adds_conservative_bilingual_seed_terms(self):
+        class RecordingEmbedder:
+            model = "recording-fake-v1"
+
+            def __init__(self):
+                self.queries = []
+
+            def embed(self, texts):
+                self.queries.extend(texts)
+                return [[1.0, 0.0] for _ in texts]
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with Graph3Store(Path(temp_dir) / "db") as store:
+                embedder = RecordingEmbedder()
+                pack = Graph3Retriever(store, embedder=embedder).retrieve(
+                    "在线自适应放疗的工作流和时间成本",
+                    limit=5,
+                )
+
+            self.assertEqual(len(embedder.queries), 1)
+            self.assertIn("online adaptive radiotherapy", embedder.queries[0])
+            self.assertIn("workflow framework process", embedder.queries[0])
+            self.assertIn("runtime latency time cost ms", embedder.queries[0])
+            self.assertEqual(
+                pack.retrieval_trace["query_expansions"],
+                [
+                    "online adaptive radiotherapy",
+                    "workflow framework process",
+                    "runtime latency time cost ms",
+                ],
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

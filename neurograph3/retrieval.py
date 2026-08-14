@@ -15,6 +15,35 @@ _MECHANISM_MARKERS = (
     "机制", "流程", "framework", "architecture", "component", "module",
     "input", "output", "step", "network", "首先", "然后", "最后",
 )
+
+_QUERY_EXPANSIONS = (
+    ("在线自适应放疗", "online adaptive radiotherapy"),
+    ("自适应放疗", "adaptive radiotherapy"),
+    ("实时", "real-time in-treatment"),
+    ("流程", "workflow framework process"),
+    ("工作流", "workflow framework process"),
+    ("机制", "mechanism architecture"),
+    ("时间成本", "runtime latency time cost ms"),
+    ("耗时", "runtime latency ms"),
+    ("时间", "runtime latency"),
+    ("结果", "results outcome performance"),
+)
+
+
+def _expand_query_for_vector(query: str) -> tuple[str, list[str]]:
+    """Add conservative bilingual seed terms without changing the user query."""
+    matched = [(chinese, english) for chinese, english in _QUERY_EXPANSIONS if chinese in query]
+    expansions = [
+        english
+        for chinese, english in matched
+        if not any(
+            chinese != longer and chinese in longer and longer in query
+            for longer, _ in matched
+        )
+    ]
+    if not expansions:
+        return query, []
+    return " ".join([query, *expansions]), expansions
 _COMPARISON_MARKERS = ("比较", "对比", "versus", "compared", "difference", "优于", "相比")
 _LIMITATION_MARKERS = ("限制", "局限", "不足", "limitation", "适用范围", "不适用")
 
@@ -470,7 +499,10 @@ class Graph3Retriever:
 
         if self.embedder is not None:
             try:
-                query_vector = self.embedder.embed([query])[0]
+                embedding_query, query_expansions = _expand_query_for_vector(query)
+                query_vector = self.embedder.embed([embedding_query])[0]
+                if query_expansions:
+                    trace["query_expansions"] = query_expansions
                 vector_limit = min(limit * 3, plan.max_candidates)
                 if self.vector_index is None:
                     vector_hits = self.store.search_vector(query_vector, limit=vector_limit)
