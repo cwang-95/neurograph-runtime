@@ -111,6 +111,8 @@ class EvidenceItem(BaseModel):
     suppressed_claim_version_ids: list[str] = Field(default_factory=list)
     claim_conflict_ids: list[str] = Field(default_factory=list)
     zenbrain_claim_prior: float = 0.0
+    fusion_score: float = 0.0
+    route_contributions: dict[str, float] = Field(default_factory=dict)
     combined_score: float = 0.0
     retrieval_routes: list[str] = Field(default_factory=list)
 
@@ -328,24 +330,39 @@ class Graph3Retriever:
     def retrieve(self, query: str, limit: int = 8) -> EvidencePack:
         plan = QueryPlan.from_query(query)
         candidates: dict[str, dict[str, Any]] = {}
+        route_ranks: dict[str, dict[str, int]] = {}
+        route_weights = {"lexical": 1.0, "vector": 1.0, "graph": 0.8}
+        rrf_k = 60
         trace: dict[str, Any] = {
             "routes": ["lexical", "numeric", "entity", "graph"],
             "completion_model_called": False,
+            "fusion": {
+                "method": "rrf",
+                "k": rrf_k,
+                "route_weights": route_weights,
+            },
         }
 
-        def add_hit(hit: dict[str, Any], route: str, score: float | None = None) -> None:
+        def add_hit(
+            hit: dict[str, Any],
+            route: str,
+            score: float | None = None,
+            rank: int | None = None,
+        ) -> None:
             item = candidates.setdefault(hit["observation_id"], dict(hit))
             routes = set(item.get("retrieval_routes", []))
             routes.add(route)
             item["retrieval_routes"] = sorted(routes)
+            if rank is not None:
+                route_ranks.setdefault(route, {}).setdefault(hit["observation_id"], rank)
             if route == "vector":
                 item["vector_score"] = max(float(item.get("vector_score") or 0.0), float(score or 0.0))
             elif route == "graph":
                 item["graph_score"] = max(float(item.get("graph_score") or 0.0), float(score or 0.0))
 
         lexical_hits = self.store.search_lexical(query, limit=min(limit * 3, plan.max_candidates))
-        for hit in lexical_hits:
-            add_hit(hit, "lexical")
+        for rank, hit in enumerate(lexical_hits, start=1):
+            add_hit(hit, "lexical", rank=rank)
 
         entity_hits = self.store.search_entities(query, limit=10)
         entity_ids = [item["entity_id"] for item in entity_hits]
@@ -354,12 +371,20 @@ class Graph3Retriever:
             max_hops=plan.max_hops,
             beam_width=plan.beam_width,
         )
-        for hit in graph_hits:
+        ranked_graph_hits = sorted(
+            graph_hits,
+            key=lambda hit: max(
+                (path["confidence"] for path in graph_paths if hit["observation_id"] in path["observation_ids"]),
+                default=0.0,
+            ),
+            reverse=True,
+        )
+        for rank, hit in enumerate(ranked_graph_hits, start=1):
             path_score = max(
                 (path["confidence"] for path in graph_paths if hit["observation_id"] in path["observation_ids"]),
                 default=0.0,
             )
-            add_hit(hit, "graph", path_score)
+            add_hit(hit, "graph", path_score, rank=rank)
 
         if self.embedder is not None:
             try:
@@ -376,8 +401,8 @@ class Graph3Retriever:
                     vector_hits = self.store.observation_hits(
                         list(vector_scores), vector_scores=vector_scores
                     )
-                for hit in vector_hits:
-                    add_hit(hit, "vector", hit.get("vector_score"))
+                for rank, hit in enumerate(vector_hits, start=1):
+                    add_hit(hit, "vector", hit.get("vector_score"), rank=rank)
                 trace["routes"].append("vector")
                 trace["vector_candidates"] = len(vector_hits)
                 if self.vector_index is not None:
@@ -390,8 +415,8 @@ class Graph3Retriever:
                         vector_hits = self.store.search_vector(
                             query_vector, limit=min(limit * 3, plan.max_candidates)
                         )
-                        for hit in vector_hits:
-                            add_hit(hit, "vector", hit.get("vector_score"))
+                        for rank, hit in enumerate(vector_hits, start=1):
+                            add_hit(hit, "vector", hit.get("vector_score"), rank=rank)
                         trace["routes"].append("vector")
                         trace["vector_candidates"] = len(vector_hits)
                     except Exception as fallback_exc:
@@ -489,10 +514,15 @@ class Graph3Retriever:
                 default=0.0,
             )
             item["claim_conflict_ids"] = []
+            route_contributions = {
+                route: route_weights[route] / (rrf_k + rank)
+                for route, ranks in route_ranks.items()
+                if (rank := ranks.get(item["observation_id"])) is not None
+            }
+            item["route_contributions"] = route_contributions
+            item["fusion_score"] = sum(route_contributions.values())
             item["combined_score"] = (
-                float(item.get("lexical_score", 0.0))
-                + float(item.get("vector_score", 0.0) or 0.0)
-                + float(item.get("graph_score", 0.0) or 0.0) * 0.5
+                item["fusion_score"]
                 + item["zenbrain_prior"] * 0.1
                 + item["zenbrain_path_prior"] * 0.05
                 + item["zenbrain_edge_prior"] * 0.03
