@@ -1,0 +1,3 @@
+# Optional dependencies for persistent HNSW vector retrieval.
+numpy>=1.26,<3
+hnswlib>=0.8,<1

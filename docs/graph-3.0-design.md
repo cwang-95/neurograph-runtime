@@ -595,6 +595,11 @@ ANN 后端是可选依赖，当前环境未安装时命令会明确返回不可�
 到 SQLite 精确余弦搜索。`ANNIndex` 只保存向量和 Observation ID 映射，不替代
 SQLite；索引损坏、缺失、模型不一致或维度不一致时必须重新构建。安装
 `hnswlib` 或 `faiss-cpu` 后再执行重建，不应把不同 embedding 模型混入同一索引。
+项目提供 HNSW 可选依赖清单：
+
+```bash
+python -m pip install -r requirements-graph3-ann.txt
+```
 
 embedding 批处理与基准入口：
 
