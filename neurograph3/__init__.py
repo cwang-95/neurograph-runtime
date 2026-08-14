@@ -21,6 +21,7 @@ from .llm_relations import (
     RelationRejection,
     validate_relation_proposals,
 )
+from .pipeline import GraphBuildStats, build_relation_graph, ingest_and_build_graph
 
 __all__ = [
     "ClaimVersion",
@@ -46,4 +47,7 @@ __all__ = [
     "RelationProposal",
     "RelationRejection",
     "validate_relation_proposals",
+    "GraphBuildStats",
+    "build_relation_graph",
+    "ingest_and_build_graph",
 ]

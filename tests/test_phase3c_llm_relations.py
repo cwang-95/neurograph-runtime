@@ -13,6 +13,7 @@ from neurograph3.llm_relations import (
     validate_relation_proposals,
 )
 from neurograph3.models import ObservationKind
+from neurograph3.pipeline import build_relation_graph
 from neurograph3.store import Graph3Store
 
 
@@ -126,6 +127,76 @@ DREME provides anatomy to GeoDose for dose calculation.
             )
             with patch.dict("os.environ", {"DEEPSEEK_API_KEY": ""}, clear=False):
                 self.assertEqual(load_deepseek_api_key(config_path), "local-test-key")
+
+    def test_relation_pipeline_is_opt_in_and_respects_llm_budget(self):
+        source = """# Talk
+
+## Slide 1
+
+### PPT 视觉提取
+
+DREME provides anatomy to GeoDose.
+
+## Slide 2
+
+### PPT 视觉提取
+
+DREME provides real-time anatomy to GeoDose.
+"""
+
+        class FakeRelationClient:
+            def __init__(self):
+                self.calls = 0
+
+            def extract(self, observation, entities):
+                self.calls += 1
+                return validate_relation_proposals(
+                    {
+                        "relations": [
+                            {
+                                "source": "DREME",
+                                "predicate": "provides_input_to",
+                                "target": "GeoDose",
+                                "confidence": 0.9,
+                            }
+                        ]
+                    },
+                    observation,
+                    entities,
+                    model="fake",
+                )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            source_path = Path(temp_dir) / "talk.md"
+            source_path.write_text(source, encoding="utf-8")
+            result = ingest_markdown(source_path, storage_root=Path(temp_dir) / "assets", dataset="fixture")
+            client = FakeRelationClient()
+            with Graph3Store(Path(temp_dir) / "db") as store:
+                store.put_ingest_result(result)
+                stats = build_relation_graph(
+                    store,
+                    result.observations,
+                    relation_client=client,
+                    use_deepseek=True,
+                    max_llm_calls=1,
+                    include_cooccurrence=False,
+                )
+
+                self.assertEqual(client.calls, 1)
+                self.assertEqual(stats.llm_calls, 1)
+                self.assertEqual(stats.llm_accepted, 1)
+                self.assertTrue(stats.llm_budget_exhausted)
+                self.assertEqual(store.counts()["relations"], 1)
+
+                no_llm_client = FakeRelationClient()
+                no_llm_stats = build_relation_graph(
+                    store,
+                    result.observations,
+                    relation_client=no_llm_client,
+                    use_deepseek=False,
+                )
+                self.assertEqual(no_llm_client.calls, 0)
+                self.assertEqual(no_llm_stats.llm_calls, 0)
 
 
 if __name__ == "__main__":
