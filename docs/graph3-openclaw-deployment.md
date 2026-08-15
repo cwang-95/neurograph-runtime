@@ -21,11 +21,33 @@ bash scripts/setup_graph3.sh
 
 默认存储为仓库内 `data/graph3-openclaw-full`（该目录被 Git 忽略）。已有外部语料时，通过 `NEUROGRAPH_GRAPH3_STORAGE` 指定，不要把运行数据提交到仓库。
 
-全量库当前包含 249 个来源、2,161 个观测；向量索引使用本地 Qwen3-Embedding-0.6B、1024 维。运行时默认不自动切换本地模型，以避免影响 OpenClaw 常驻视觉模型。若要显式启用语义向量查询，可设置：
+全量库当前包含 249 个来源、2,161 个观测；向量索引使用本地 Qwen3-Embedding-0.6B、1024 维。
+
+`kb_search` 默认尝试本机 8003 端口的 embedding 服务，并默认开启 FSRS。embedding 服务不可用时，Graph3 会保留词法、数值、实体、图路径和 ZenBrain 检索；跨电脑部署时建议按目标机器显式配置：
 
 ```bash
-export NEUROGRAPH_GRAPH3_EMBEDDING_ENDPOINT=http://127.0.0.1:8000/v1/embeddings
+export NEUROGRAPH_GRAPH3_EMBEDDING_ENDPOINT=http://127.0.0.1:8003/v1/embeddings
 export NEUROGRAPH_GRAPH3_EMBEDDING_MODEL=mlx-community/Qwen3-Embedding-0.6B-4bit-DWQ
+```
+
+如果目标机器没有 embedding 服务：
+
+```bash
+export NEUROGRAPH_GRAPH3_DISABLE_EMBEDDING=1
+```
+
+如果目标机器没有 OpenClaw 的 ZenBrain Node 依赖：
+
+```bash
+export NEUROGRAPH_GRAPH3_FSRS=0
+```
+
+作答反馈通过以下脚本回写，`N` 表示最多记录前 N 条证据及对应的 claim、图路径和关系：
+
+```bash
+scripts/g3fb selected /tmp/pack.json 3
+scripts/g3fb cited /tmp/pack.json 3
+scripts/g3fb corrected /tmp/pack.json 3
 ```
 
 ## 验证与回滚

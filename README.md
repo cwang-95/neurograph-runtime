@@ -15,6 +15,25 @@ scripts/kb_search "自适应放疗的工作流和时间成本" 8 --graph-evidenc
 NEUROGRAPH_BACKEND=cognee scripts/kb_search "自适应放疗" 8 --graph-evidence --json
 ```
 
+如果部署机器提供 OpenAI-compatible embedding 服务，`kb_search` 默认尝试本机
+`http://127.0.0.1:8003/v1/embeddings`，也可以显式覆盖；没有该服务时仍会保留词法、数值、实体和图检索：
+
+```bash
+export NEUROGRAPH_GRAPH3_EMBEDDING_ENDPOINT=http://127.0.0.1:8003/v1/embeddings
+export NEUROGRAPH_GRAPH3_EMBEDDING_MODEL=mlx-community/Qwen3-Embedding-0.6B-4bit-DWQ
+# 没有 embedding 服务时显式关闭向量路由，避免等待连接超时
+export NEUROGRAPH_GRAPH3_DISABLE_EMBEDDING=1
+```
+
+FSRS 默认开启；如果部署机器没有 OpenClaw 的 ZenBrain Node 依赖，可设置
+`NEUROGRAPH_GRAPH3_FSRS=0`，不影响基础检索。
+
+作答后的 EvidencePack 可通过反馈脚本回写 ZenBrain，只记录前 N 条证据及其关联的 claims、图路径和关系：
+
+```bash
+scripts/g3fb selected /tmp/pack.json 3
+```
+
 完整部署说明见 [`docs/graph3-openclaw-deployment.md`](docs/graph3-openclaw-deployment.md)，历史设计记录见下文。
 
 ---

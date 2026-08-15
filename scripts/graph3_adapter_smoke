@@ -24,6 +24,11 @@ trap 'rm -rf "$TMP_ROOT"' EXIT
 export NEUROGRAPH_BACKEND=graph3
 export NEUROGRAPH_GRAPH3_ROOT="$GRAPH3_ROOT"
 export NEUROGRAPH_GRAPH3_STORAGE="$GRAPH3_STORAGE"
+# Keep the adapter contract smoke deterministic: full vector/FSRS routing is
+# validated separately, while this script focuses on answer/evidence/follow-up
+# behavior and should not depend on local model availability or learned state.
+export NEUROGRAPH_GRAPH3_DISABLE_EMBEDDING="${NEUROGRAPH_GRAPH3_DISABLE_EMBEDDING:-1}"
+export NEUROGRAPH_GRAPH3_FSRS="${NEUROGRAPH_GRAPH3_FSRS:-0}"
 
 echo "[1/5] AnswerDraft route"
 "$ADAPTER" "$QUERY" 6 --answer-draft --json > "$TMP_ROOT/answer.json"

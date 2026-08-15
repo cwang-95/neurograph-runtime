@@ -1,0 +1,129 @@
+#!/usr/bin/env bash
+# ============================================================
+# g3fb — Graph3 自动反馈薄封装(OpenClaw 日常问答用, 2026-08-15)
+# 用法:
+#   g3fb selected   /path/to/pack.json           # 作答引用了一批证据 → 标 selected
+#   g3fb cited      /path/to/pack.json           # 明确引用了证据 → 标 cited
+#   g3fb followed   /path/to/pack.json [n]       # 用户深度追问这批证据 → followed_up(默认前3条)
+#   echo '<json>' | g3fb <event> -              # 从 stdin 读 pack
+# 说明:
+#   - 自动用正确的 storage-root(data/graph3-openclaw-full) + 默认开 --fsrs
+#   - 失败静默:任何异常只打到 stderr,不阻塞主流程(exit 0)
+#   - 只会给 pack 里 "排前 N" 的证据记事件,避免把召回的全部 34 条都加权重
+# ============================================================
+set -uo pipefail
+SCRIPT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+PY="${NEUROGRAPH_GRAPH3_PYTHON:-}"
+if [[ -z "$PY" ]]; then
+  for candidate in \
+    "$SCRIPT_ROOT/.venv/bin/python" \
+    "$SCRIPT_ROOT/.venv/Scripts/python.exe" \
+    "$HOME/.cognee-venv/bin/python" \
+    "$HOME/.cognee-venv/Scripts/python.exe"; do
+    if [[ -x "$candidate" ]]; then
+      PY="$candidate"
+      break
+    fi
+  done
+fi
+STORAGE="${NEUROGRAPH_GRAPH3_STORAGE:-$SCRIPT_ROOT/data/graph3-openclaw-full}"
+FB="$SCRIPT_ROOT/scripts/graph3_feedback"
+
+EVENT="${1:-}"; PK="${2:-}"; N="${3:-3}"
+if [[ -z "$EVENT" ]]; then echo "g3fb: 缺少事件类型" >&2; exit 0; fi
+case "$EVENT" in
+  selected) ETTYPE="selected" ;;
+  cited)    ETTYPE="cited" ;;
+  followed) ETTYPE="followed_up" ;;
+  corrected) ETTYPE="corrected" ;;
+  confirmed) ETTYPE="user_confirmed" ;;
+  rejected) ETTYPE="rejected" ;;
+  *) echo "g3fb: 未知事件 $EVENT" >&2; exit 0 ;;
+esac
+
+if [[ "$PK" == "-" ]]; then
+  PACK=$(cat)
+elif [[ -f "$PK" ]]; then
+  PACK=$(cat "$PK")
+else
+  echo "g3fb: 找不到 pack 文件 $PK" >&2; exit 0
+fi
+
+if [[ -z "$PY" || ! -x "$PY" ]]; then
+  echo "g3fb: 找不到可用 Python 解释器" >&2; exit 0
+fi
+
+FEEDBACK_JSON=$("$PY" - "$PACK" "$N" <<'PYEOF'
+import json,sys
+pack=json.loads(sys.argv[1]); n=int(sys.argv[2])
+if n < 1:
+    raise ValueError('N must be positive')
+
+all_items = [*pack.get('evidence', []), *pack.get('context_evidence', [])]
+selected_items = all_items[:n]
+all_observation_ids = [
+    e.get('observation_id')
+    for e in all_items
+    if e.get('observation_id')
+]
+selected_observation_ids = [
+    e.get('observation_id')
+    for e in selected_items
+    if e.get('observation_id')
+]
+all_claim_version_ids = [
+    claim_id
+    for e in pack.get('evidence', [])
+    for claim_id in e.get('claim_version_ids', [])
+]
+selected_claim_version_ids = [
+    claim_id
+    for e in selected_items
+    for claim_id in e.get('claim_version_ids', [])
+]
+all_paths = pack.get('graph_paths', [])
+selected_observation_set = set(selected_observation_ids)
+selected_paths = [
+    path
+    for path in all_paths
+    if selected_observation_set.intersection(path.get('observation_ids', []))
+][:n]
+all_path_ids = [path.get('path_id') for path in all_paths if path.get('path_id')]
+selected_path_ids = [path.get('path_id') for path in selected_paths if path.get('path_id')]
+all_relation_ids = [
+    edge.get('relation_id')
+    for path in all_paths
+    for edge in path.get('path_edges', [])
+    if edge.get('relation_id')
+]
+selected_relation_ids = [
+    edge.get('relation_id')
+    for path in selected_paths
+    for edge in path.get('path_edges', [])
+    if edge.get('relation_id')
+]
+req={
+  'context':{
+    'query':pack.get('query',''),
+    'observation_ids':list(dict.fromkeys(all_observation_ids)),
+    'claim_version_ids':list(dict.fromkeys(all_claim_version_ids)),
+    'relation_ids':list(dict.fromkeys(all_relation_ids)),
+    'path_ids':list(dict.fromkeys(all_path_ids))
+  },
+  'event_type':'%ETYPE%',
+  'observation_ids':list(dict.fromkeys(selected_observation_ids)),
+  'claim_version_ids':list(dict.fromkeys(selected_claim_version_ids)),
+  'relation_ids':list(dict.fromkeys(selected_relation_ids)),
+  'path_ids':list(dict.fromkeys(selected_path_ids)),
+  'caller':'openclaw-auto-feedback'
+}
+print(json.dumps(req,ensure_ascii=False))
+PYEOF
+)
+FEEDBACK_JSON="${FEEDBACK_JSON//%ETYPE%/$ETTYPE}"
+
+if [[ -z "$FEEDBACK_JSON" ]]; then echo "g3fb: 无法构造反馈" >&2; exit 0; fi
+LOG_FILE="${TMPDIR:-/tmp}/g3fb.log"
+echo "$FEEDBACK_JSON" | "$PY" "$FB" --storage-root "$STORAGE" --fsrs >/dev/null 2>>"$LOG_FILE" \
+  && echo "g3fb: $ETTYPE -> $N 条" >&2 || echo "g3fb: 写库失败(静默): $ETTYPE" >&2
+exit 0
