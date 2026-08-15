@@ -1,14 +1,15 @@
-# OpenClaw Graph 3.0 可选后端
+# OpenClaw Graph 3.0 适配器
 
-当前适配分支只增加开关，不改变稳定默认行为。
+当前 `main` 已将 Graph 3.0 接入 OpenClaw，知识域 `knowledge/wiki_full` 默认走
+Graph3。Cognee 仍保留为兼容和回滚后端。
 
-默认仍然是 Cognee：
+默认调用：
 
 ```bash
 scripts/kb_search "自适应放疗" 4 --graph-evidence --json
 ```
 
-显式开启 Graph 3.0：
+显式指定 Graph 3.0（用于固定运行目录或调试）：
 
 ```bash
 NEUROGRAPH_BACKEND=graph3 \
@@ -18,28 +19,39 @@ scripts/kb_search "自适应放疗" 4 --graph-evidence --json
 ```
 
 Graph 3.0 后端返回 JSON EvidencePack，供上层模型回答；回答完成后再把实际引用的
-ID 通过 `scripts/graph3_feedback` 回写。需要读取 FSRS 弱先验时增加：
+ID 通过 `scripts/g3fb` 回写。FSRS 默认开启；需要关闭时设置：
 
 ```bash
-NEUROGRAPH_GRAPH3_FSRS=1
+NEUROGRAPH_GRAPH3_FSRS=0
 ```
 
-适配器默认优先使用 Graph 3.0 根目录下的 `.venv/bin/python`，这样可直接使用 Graph 3.0 的 ANN 依赖；若该环境不存在，才回退到 `~/.cognee-venv/bin/python`。也可以显式指定：
+适配器默认优先使用 Graph 3.0 根目录下的 `.venv/bin/python`（Windows 为
+`.venv/Scripts/python.exe`），这样可直接使用 Graph 3.0 的 ANN 依赖；若该环境不存在，才回退到旧 Cognee 环境。也可以显式指定：
 
 ```bash
 NEUROGRAPH_GRAPH3_PYTHON=/path/to/graph3/.venv/bin/python
 ```
 
-如果 Graph 3.0 的语料已经建立 embedding，可继续通过环境变量启用语义路由；这些变量只透传到底层入口，不改变默认的词法+图检索：
+当前语料已建立 embedding。适配器默认尝试本机 embedding 服务；端点、模型和 ANN
+路径均可通过环境变量覆盖：
 
 ```bash
-NEUROGRAPH_GRAPH3_EMBEDDING_ENDPOINT=http://127.0.0.1:8000/v1/embeddings \\
+NEUROGRAPH_GRAPH3_EMBEDDING_ENDPOINT=http://127.0.0.1:8003/v1/embeddings \\
 NEUROGRAPH_GRAPH3_EMBEDDING_MODEL=mlx-community/Qwen3-Embedding-0.6B-4bit-DWQ \\
 NEUROGRAPH_GRAPH3_ANN_INDEX=/path/to/graph3-ann \\
 NEUROGRAPH_GRAPH3_ANN_BACKEND=auto
 ```
 
-只有设置 `NEUROGRAPH_GRAPH3_EMBEDDING_ENDPOINT` 时才会调用 embedding 服务；未设置或服务不可用时，Graph 3.0 保留词法、数值和图路径结果，不会让整个查询失败。
+默认模型为 `mlx-community/Qwen3-Embedding-0.6B-4bit-DWQ`。如果部署机器没有该服务，
+可显式关闭向量路由；Graph 3.0 仍保留词法、数值、实体和图路径结果：
+
+```bash
+NEUROGRAPH_GRAPH3_DISABLE_EMBEDDING=1 \\
+scripts/kb_search "自适应放疗" 4 --graph-evidence --json
+```
+
+未设置 `NEUROGRAPH_GRAPH3_DISABLE_EMBEDDING=1` 时，适配器会按默认端点尝试连接；服务
+不可用时也会回退到非向量路线，不会让整个查询失败。
 
 如果调用方需要一个不调用 DeepSeek 的确定性回答草稿，可显式使用：
 
@@ -54,10 +66,15 @@ scripts/kb_search "GeoDose 的机制和结果" 6 --answer-draft --json
 机制/量化结果分组的证据、Observation ID 和原始定位。它只组装 EvidencePack，
 不生成新的事实；上层模型若继续润色，也只能使用返回的证据和 citations。
 
-回滚只需取消 `NEUROGRAPH_BACKEND=graph3`，无需修改 OpenClaw 稳定配置。
+回滚只需设置 `NEUROGRAPH_BACKEND=cognee`，无需修改 OpenClaw 稳定配置：
+
+```bash
+NEUROGRAPH_BACKEND=cognee \\
+scripts/kb_search "自适应放疗" 4 --graph-evidence --json
+```
 
 Graph 3.0 仍不接管旧的 `--answer` 模式，避免和上层 DeepSeek 重复生成答案；需要
-确定性回答草稿时使用新增的 `--answer-draft`。取消 `NEUROGRAPH_BACKEND=graph3`
+确定性回答草稿时使用新增的 `--answer-draft`。设置 `NEUROGRAPH_BACKEND=cognee`
 即可回滚到 Cognee。
 
 接入前可运行灰度冒烟检查，不修改稳定配置：
