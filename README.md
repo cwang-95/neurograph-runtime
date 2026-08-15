@@ -40,6 +40,8 @@ scripts/g3fb selected /tmp/pack.json 3
 
 # 历史方案记录：记忆图谱 2.0 — 知识库 × 类脑记忆融合
 
+> 本节是 2026-08-10 的方案草稿，仅用于保留决策背景；当前运行状态、默认入口和部署参数以上方说明及 `docs/graph3-openclaw-deployment.md` 为准。文中“计划”“尚未切换”等表述不代表当前 `main`。
+
 > 版本: v1 | 日期: 2026-08-10 | 定调人: 王成
 > 一句话: **①用 cognee 铺路先受益,②自研真向量库+认知图谱+类脑算法长成工业级,①验证②、②接手①。**
 
@@ -47,8 +49,8 @@ scripts/g3fb selected /tmp/pack.json 3
 
 ## 一、背景与目标
 
-### 现状痛点
-1. 知识库(wiki 198 篇文献 + kb_rag)是"惰性/事后查"——**只有我主动跑 search_kb.py 才用**,答前不带着专业知识,没有"被动底色"。
+### 现状痛点（历史记录）
+1. 当时的知识库(wiki 198 篇文献 + kb_rag)是"惰性/事后查"——**只有我主动跑 search_kb.py 才用**,答前不带着专业知识,没有"被动底色"。
 2. memory_rag(轻量自研)思路先进(类脑算法 ZenBrain:FSRS遗忘/Hebbian强化/情绪加权/睡眠巩固),但**工程是雏形**(.npy + 余弦 + 规则共现图),非工业级。
 
 ### 目标
@@ -149,7 +151,7 @@ scripts/g3fb selected /tmp/pack.json 3
 
 ---
 
-## 七、当前状态 & 下一步
+## 七、历史状态记录（不代表当前部署）
 - [x] ①cognee 8篇验证通过(灌→建图→检索全通,命中极高)
 - [x] ①批量灌 wiki 全量 223 篇 + 建认知图谱 + 可视化出图
 - [x] ①检索链路打通(LLM 换 DeepSeek,DashScope 免费额度不会被烧光)
@@ -157,8 +159,8 @@ scripts/g3fb selected /tmp/pack.json 3
 - [x] 冒烟测试通过(5 个专业查询全部命中+ZenBrain 排序正常)
 - [x] **文献 + GitHub 项目双数据集融合检索**: 新增 github_projects 数据集(每周灌), query.py/kb_search 支持跨数据集检索(--all)
 - [x] 每周 cron 已升级: 检索项目→学习笔记→灌图谱版→灌进 github_projects
-- [ ] ②选型落地(LanceDB + 认知图谱 + ZenBrain 内嵌)
-- [ ] ②成熟后迁移收尾
+- [x] ②选型落地：已由 Graph3 自研核心、SQLite 权威存储、可重建 HNSW 和 ZenBrain 反馈机制完成
+- [x] ②成熟后迁移收尾：Graph3 已合并 `main` 并成为 OpenClaw knowledge/wiki_full 默认入口
 
 ### 已验证能力(2026-08-11)
 - 查"自适应放疗" → 命中《AI-driven ART》《AMA ART review》等 3+ 篇
@@ -166,7 +168,7 @@ scripts/g3fb selected /tmp/pack.json 3
 - 跨数据集检索: docs/wiki_full(文献) + github_projects(项目)
 - 标题清洗已生效(不再显示 `---` frontmatter)
 
-> 下一步②按阶段推进(见四); ②成熟后①退居备用, 参照本文档"周日升级版注意事项"避开已踩的坑。
+> 上述“下一步”属于历史计划。当前部署、数据规模和验证结果见 README 顶部及部署文档。
 
 ---
 

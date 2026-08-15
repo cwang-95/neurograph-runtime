@@ -1,19 +1,27 @@
 # NeuroGraph 3.0 技术设计
 
-状态：设计基线 v0.5（已完成首轮技术 review；Phase 0–5 与证据覆盖基础已在 `feature/graph-3.0` 落地，已完成全量 AAPM 语义检索灰度验证，尚未切换 OpenClaw 默认入口）
+文档属性：设计与实现演进记录。当前部署状态以 `README.md` 和
+`docs/graph3-openclaw-deployment.md` 为准。
+
+状态：Graph 3.0 已合并 `main`，并已成为 OpenClaw `knowledge/wiki_full` 的默认入口。
+当前运行库包含 249 个 Markdown 来源、2,161 个 Observation、2,161 个 1,024 维
+embedding；HNSW 可用时参与向量召回，缺失时自动回退到 SQLite 精确检索。默认查询
+返回 `EvidencePack`，由上层 OpenClaw/Codex 模型完成最终回答，不在检索层重复调用
+DeepSeek。Cognee 仍保留作兼容和回滚后端。
 
 当前实现边界：已具备 RawAsset/SourceElement/Observation、Claim/EvidenceLink、保守实体图、显式模式语义关系、多证据关系聚合、DeepSeek 结构化关系候选及严格审核、可控批量构建入口、受 hop/beam/关系白名单约束的多跳图扩展、ZenBrain 追加事件账本与弱先验、多路 lexical/numeric/vector/graph 召回、可解释 RRF 路线融合、EvidencePack 槽位覆盖与确定性追问、现有 ZenBrain FSRS 调度器适配、Observation/ClaimVersion/Relation/Path 显式回答反馈接口、ClaimVersion 抑制与冲突投影、Codex/OpenClaw 通用反馈协议与 CLI。向量检索默认是可重建的 SQLite brute-force 基线，也已接入可选 HNSW/FAISS 派生索引及自动回退；DeepSeek 只生成候选，不直接改变权威事实；边/路径/Claim 目前使用事件弱先验，尚未有独立 FSRS 状态。
 
-### 2026-08-15 灰度前置实测
+### 2026-08-15 当前部署实测
 
 - 使用现有 OpenClaw `merged_talks` 的 12 份 AAPM Markdown 做隔离构建：1,900 个 Observation、159 条 Claim 候选、14 个实体、23 条关系；构建过程未调用 DeepSeek。
-- 当前开发副本默认 `data/graph3` 仍是单份材料的小库，且没有 Observation embedding，不能代表全量知识库；因此没有切换 OpenClaw 默认入口。
+- 当前默认运行库为 `data/graph3-openclaw-full`；部署数据位于仓库外部或由
+  `NEUROGRAPH_GRAPH3_STORAGE` 指定，运行数据不会提交到 Git。
 - 真实查询结果：英文 `online adaptive radiotherapy workflow` 返回 6 条可引用直接证据；混合查询 `GeoDose 机制 结果 runtime` 同时返回机制与量化结果，包含 1.5 ms、70.1 ms、30.6 ms 和约 100 ms 的原始证据。
 - 纯中文 `自适应放疗的实时计划流程` 在没有 embedding 的隔离库中按设计追问，说明当前缺口是中文语义召回而不是回答层重复调用模型；加入英文核心实体后可命中同一批跨页证据。
 - 本次灰度已通过 Rapid-MLX 模型管理器按需加载 Qwen3-Embedding-0.6B；1,900 条 Observation 全部生成 1024 维向量，并成功构建 1,900 条 HNSW 索引。验证完成后已恢复 `qwen3-vl-8b-4bit`，没有改变 OpenClaw 当前视觉模型状态。
 - 纯中文 `自适应放疗的实时计划流程` 已从无向量时的 `follow_up` 变为 `answer`，返回直接证据与机制证据；Graph3 query trace 实际包含 lexical、numeric、entity、graph、vector、ZenBrain 路线，GeoDose 查询额外产生 5 条图路径。
 - 对宽泛中文问题增加了保守的双语向量种子扩展；`在线自适应放疗的工作流和时间成本` 已从缺少量化槽位的追问变为 `answer`，召回到“10–20 秒”的流程效率证据。扩展只影响向量查询文本，不改用户原问题、原始证据或事实判断。
-- OpenClaw adapter 已支持 Graph3 运行时选择：优先使用 Graph 3.0 `.venv` 以启用 HNSW，不存在时回退旧 cognee 环境；语义端点、模型、ANN 路径均由环境变量控制。默认入口仍保持 Cognee，下一步是基于更大领域语料做 A/B 与切换门槛评测。
+- OpenClaw adapter 已支持 Graph3 运行时选择：优先使用 Graph 3.0 `.venv` 以启用 HNSW，不存在时回退旧 Cognee 环境；语义端点、模型、ANN 路径均由环境变量控制。当前默认 embedding 端点为 `http://127.0.0.1:8003/v1/embeddings`，FSRS 默认开启，均可由环境变量关闭或覆盖。下一步是扩展跨领域评测，不是等待默认入口切换。
 
 ## 1. 目标、原则与边界
 
@@ -571,19 +579,19 @@ AnswerFeedbackRecorder(store, ledger).record(request)
 
 ```bash
 scripts/graph3_query "自适应放疗的实时计划流程" \
-  --storage-root data/graph3 > evidence-pack.json
+  --storage-root data/graph3-openclaw-full > evidence-pack.json
 # 启用本地 embedding；若 ANN 索引不可用，retrieval_trace 会记录 SQLite 回退
 scripts/graph3_query "自适应放疗的实时计划流程" \
-  --storage-root data/graph3 \
-  --embedding-endpoint http://127.0.0.1:8000/v1/embeddings \
-  --ann-index data/graph3/vector_index > evidence-pack.json
+  --storage-root data/graph3-openclaw-full \
+  --embedding-endpoint http://127.0.0.1:8003/v1/embeddings \
+  --ann-index data/graph3-openclaw-full/vector_index > evidence-pack.json
 # 回答层从 evidence-pack.json 选择实际引用的 ID 后提交反馈
-printf '%s' '<反馈 JSON>' | scripts/graph3_feedback \
-  --storage-root data/graph3
+scripts/g3fb cited evidence-pack.json 3
 ```
 
-当前只在 3.0 分支提供适配层，OpenClaw 稳定入口仍保持不变；切换默认入口
-前需要把 `graph-evidence` 的输出改为携带这些稳定 ID，并在回答完成后调用该 CLI/API。
+当前适配层已合并到 `main` 并作为 OpenClaw knowledge/wiki_full 默认入口；
+`graph-evidence` 输出携带稳定 ID，回答完成后通过 `scripts/g3fb` 或 Python API
+提交实际使用的反馈。
 
 ## 10. 存储与工程实现
 
@@ -649,13 +657,13 @@ embedding 批处理与基准入口：
 # 默认只补当前模型缺失的 Observation 向量
 scripts/graph3_embedding_index \
   --storage-root data/graph3 \
-  --embedding-endpoint http://127.0.0.1:8000/v1/embeddings \
+  --embedding-endpoint http://127.0.0.1:8003/v1/embeddings \
   --report data/graph3-embedding-report.json
 
 # 明确切换 embedding 模型或修复向量空间时，显式全量重建
 scripts/graph3_embedding_index \
   --storage-root data/graph3 \
-  --embedding-endpoint http://127.0.0.1:8000/v1/embeddings \
+  --embedding-endpoint http://127.0.0.1:8003/v1/embeddings \
   --embedding-model <model> --force
 
 # queries.txt 每行一个问题；输出 p50/p95、证据数、追问率和路线命中次数
@@ -755,8 +763,8 @@ scripts/graph3_ab_compare \
 3.0 在独立分支和 worktree 中开发，避免影响 OpenClaw 当前使用的 2.0：
 
 - 稳定运行目录：`~/.openclaw/workspace/projects/neurograph`
-- 计划开发目录：`~/Projects/neurograph-graph-3.0`
-- 计划分支：`feature/graph-3.0`
+- 当前运行目录：`~/.openclaw/workspace/projects/neurograph`
+- 当前主分支：`main`
 
 实施阶段：
 
@@ -803,13 +811,13 @@ scripts/graph3_ab_compare \
 - 验证检索不会隐式强化，反馈才会改变 FSRS 状态；
 - 后续再扩展边、路径和用户上下文的调度状态。
 
-### Phase 6：迁移与切换
+### Phase 6：迁移与切换（已完成）
 
 - 从 Cognee 2.0 导入候选实体、关系和文本引用；
 - 所有导入内容重新绑定 SourceElement 和 EvidenceLink；
 - A/B 比较 2.0 与 3.0；
-- 达到切换门槛后再修改 OpenClaw 默认入口；
-- 保留 2.0 一键回退。
+- Graph3 已成为 OpenClaw knowledge/wiki_full 默认入口；
+- 保留 Cognee 一键回退，并通过 `NEUROGRAPH_BACKEND=cognee` 选择。
 
 ## 12. 评测集与验收标准
 
