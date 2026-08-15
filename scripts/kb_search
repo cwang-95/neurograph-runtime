@@ -56,15 +56,7 @@ fi
 # remains the explicit rollback and continues to serve memory/project domains.
 if [[ "${NEUROGRAPH_BACKEND:-graph3}" == "graph3" && "$DOMAIN" == "knowledge" && "$DATASETS" == "wiki_full" ]]; then
   GRAPH3_ROOT="${NEUROGRAPH_GRAPH3_ROOT:-$SCRIPT_ROOT}"
-  if [[ -n "${NEUROGRAPH_GRAPH3_STORAGE:-}" ]]; then
-    GRAPH3_STORAGE="$NEUROGRAPH_GRAPH3_STORAGE"
-  elif [[ -d "$GRAPH3_ROOT/data/graph3-openclaw-full" ]]; then
-    GRAPH3_STORAGE="$GRAPH3_ROOT/data/graph3-openclaw-full"
-  elif [[ -d "/Users/wangcheng/Projects/neurograph-graph-3.0/data/graph3-openclaw-full" ]]; then
-    GRAPH3_STORAGE="/Users/wangcheng/Projects/neurograph-graph-3.0/data/graph3-openclaw-full"
-  else
-    GRAPH3_STORAGE="$GRAPH3_ROOT/data/graph3-openclaw-full"
-  fi
+  GRAPH3_STORAGE="${NEUROGRAPH_GRAPH3_STORAGE:-$GRAPH3_ROOT/data/graph3-openclaw-full}"
   GRAPH3_PYTHON="${NEUROGRAPH_GRAPH3_PYTHON:-$GRAPH3_ROOT/.venv/bin/python}"
   if [[ ! -x "$GRAPH3_PYTHON" ]]; then
     GRAPH3_PYTHON="$HOME/.cognee-venv/bin/python"

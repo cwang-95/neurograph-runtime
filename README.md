@@ -1,4 +1,25 @@
-# 记忆图谱 2.0 — 知识库 × 类脑记忆 融合技术方案
+# NeuroGraph — Graph 3.0 知识图谱与类脑检索
+
+> 当前可用版本已将 Graph 3.0、OpenClaw adapter 和默认部署入口整合在同一仓库。知识域默认返回可审计 EvidencePack，由上层 OpenClaw/Codex 模型完成唯一一次最终回答；Cognee 保留为可回滚兼容后端。
+
+## 快速开始
+
+```bash
+bash scripts/setup_graph3.sh
+scripts/kb_search "自适应放疗的工作流和时间成本" 8 --graph-evidence --json
+```
+
+默认数据目录是 `data/graph3-openclaw-full`，运行数据不会提交到 Git。已有外部语料时设置 `NEUROGRAPH_GRAPH3_STORAGE`。回滚到 Cognee：
+
+```bash
+NEUROGRAPH_BACKEND=cognee scripts/kb_search "自适应放疗" 8 --graph-evidence --json
+```
+
+完整部署说明见 [`docs/graph3-openclaw-deployment.md`](docs/graph3-openclaw-deployment.md)，历史设计记录见下文。
+
+---
+
+# 历史方案记录：记忆图谱 2.0 — 知识库 × 类脑记忆融合
 
 > 版本: v1 | 日期: 2026-08-10 | 定调人: 王成
 > 一句话: **①用 cognee 铺路先受益,②自研真向量库+认知图谱+类脑算法长成工业级,①验证②、②接手①。**

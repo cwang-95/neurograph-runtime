@@ -11,12 +11,15 @@ OpenClaw 的知识域 `wiki_full` 默认通过 `scripts/kb_search` 使用 Graph 
 - `--all`：Cognee 跨数据集兼容查询
 - 显式 `NEUROGRAPH_BACKEND=cognee`：全量回滚
 
-## 运行目录
+## 运行目录与安装
 
-- OpenClaw 运行脚本：`/Users/wangcheng/.openclaw/workspace/projects/neurograph`
-- Graph 3.0 开发 checkout：`/Users/wangcheng/Projects/neurograph-graph-3.0`
-- 全量存储：`/Users/wangcheng/Projects/neurograph-graph-3.0/data/graph3-openclaw-full`
-- 回滚备份：`/Users/wangcheng/.openclaw/backups/neurograph-graph3-deploy-20260815`
+Graph 3.0 与 OpenClaw adapter 位于同一个仓库 checkout。首次安装：
+
+```bash
+bash scripts/setup_graph3.sh
+```
+
+默认存储为仓库内 `data/graph3-openclaw-full`（该目录被 Git 忽略）。已有外部语料时，通过 `NEUROGRAPH_GRAPH3_STORAGE` 指定，不要把运行数据提交到仓库。
 
 全量库当前包含 249 个来源、2,161 个观测；向量索引使用本地 Qwen3-Embedding-0.6B、1024 维。运行时默认不自动切换本地模型，以避免影响 OpenClaw 常驻视觉模型。若要显式启用语义向量查询，可设置：
 

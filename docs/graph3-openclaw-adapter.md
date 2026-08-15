@@ -12,8 +12,8 @@ scripts/kb_search "自适应放疗" 4 --graph-evidence --json
 
 ```bash
 NEUROGRAPH_BACKEND=graph3 \
-NEUROGRAPH_GRAPH3_ROOT=/Users/wangcheng/Projects/neurograph-graph-3.0 \
-NEUROGRAPH_GRAPH3_STORAGE=/Users/wangcheng/Projects/neurograph-graph-3.0/data/graph3 \
+NEUROGRAPH_GRAPH3_ROOT=/path/to/neurograph-runtime \
+NEUROGRAPH_GRAPH3_STORAGE=/path/to/neurograph-runtime/data/graph3-openclaw-full \
 scripts/kb_search "自适应放疗" 4 --graph-evidence --json
 ```
 
@@ -45,8 +45,8 @@ NEUROGRAPH_GRAPH3_ANN_BACKEND=auto
 
 ```bash
 NEUROGRAPH_BACKEND=graph3 \
-NEUROGRAPH_GRAPH3_ROOT=/Users/wangcheng/Projects/neurograph-graph-3.0 \
-NEUROGRAPH_GRAPH3_STORAGE=/Users/wangcheng/Projects/neurograph-graph-3.0/data/graph3 \
+NEUROGRAPH_GRAPH3_ROOT=/path/to/neurograph-runtime \
+NEUROGRAPH_GRAPH3_STORAGE=/path/to/neurograph-runtime/data/graph3-openclaw-full \
 scripts/kb_search "GeoDose 的机制和结果" 6 --answer-draft --json
 ```
 

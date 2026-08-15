@@ -4,8 +4,8 @@ set -euo pipefail
 
 ADAPTER_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 ADAPTER="$ADAPTER_ROOT/scripts/kb_search"
-GRAPH3_ROOT="${NEUROGRAPH_GRAPH3_ROOT:-/Users/wangcheng/Projects/neurograph-graph-3.0}"
-GRAPH3_STORAGE="${NEUROGRAPH_GRAPH3_STORAGE:-$GRAPH3_ROOT/data/graph3}"
+GRAPH3_ROOT="${NEUROGRAPH_GRAPH3_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
+GRAPH3_STORAGE="${NEUROGRAPH_GRAPH3_STORAGE:-$GRAPH3_ROOT/data/graph3-openclaw-full}"
 QUERY="${NEUROGRAPH_SMOKE_QUERY:-GeoDose 的机制和结果}"
 FOLLOW_UP_QUERY="${NEUROGRAPH_SMOKE_FOLLOW_UP_QUERY:-这个方法的效果如何？}"
 PYTHON_BIN="${NEUROGRAPH_PYTHON:-$HOME/.cognee-venv/bin/python}"
