@@ -1,0 +1,191 @@
+#!/usr/bin/env python3
+"""Capture a normalized Cognee 2.0 graph-evidence baseline report.
+
+This adapter deliberately treats missing stable citations and slot statuses as
+unsupported metrics instead of fabricating them from free-form graph text.
+"""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import math
+import os
+import statistics
+import subprocess
+import time
+from pathlib import Path
+
+
+def _p95_latency(latencies: list[float]) -> float:
+    """Return the nearest-rank p95, including the max for small samples."""
+    ordered = sorted(latencies)
+    index = min(len(ordered) - 1, max(0, math.ceil(len(ordered) * 0.95) - 1))
+    return ordered[index]
+
+
+def _load_cases(path: Path) -> list[dict]:
+    raw = path.read_text(encoding="utf-8").strip()
+    if raw.startswith("["):
+        cases = json.loads(raw)
+    else:
+        cases = [
+            json.loads(line)
+            for line in raw.splitlines()
+            if line.strip() and not line.lstrip().startswith("#")
+        ]
+    if not isinstance(cases, list) or not cases:
+        raise ValueError("gold file must contain a non-empty JSON array or JSONL")
+    return cases
+
+
+def _parse_payload(stdout: str) -> dict:
+    decoder = json.JSONDecoder()
+    for index, character in enumerate(stdout):
+        if character != "{":
+            continue
+        try:
+            payload, _ = decoder.raw_decode(stdout[index:])
+        except json.JSONDecodeError:
+            continue
+        if isinstance(payload, dict) and payload.get("mode") == "graph-evidence":
+            return payload
+    raise ValueError("Cognee output did not contain a graph-evidence JSON payload")
+
+
+def _preview(value: str, limit: int = 600) -> str:
+    compact = " ".join(str(value).split())
+    return compact if len(compact) <= limit else compact[: limit - 1] + "…"
+
+
+def _fingerprint(path: Path | None) -> str | None:
+    if path is None:
+        return None
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for block in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def _run_case(case: dict, args: argparse.Namespace) -> dict:
+    query = str(case["query"])
+    started = time.perf_counter()
+    try:
+        runtime_env = os.environ.copy()
+        if args.data_root:
+            runtime_env["DATA_ROOT_DIRECTORY"] = str(args.data_root)
+        if args.system_root:
+            runtime_env["SYSTEM_ROOT_DIRECTORY"] = str(args.system_root)
+        completed = subprocess.run(
+            [
+                str(args.python),
+                "query.py",
+                query,
+                "--top",
+                str(args.top),
+                "--datasets",
+                args.dataset,
+                "--mode",
+                "graph-evidence",
+                "--format",
+                "json",
+            ],
+            cwd=args.workdir,
+            capture_output=True,
+            text=True,
+            timeout=args.timeout,
+            check=False,
+            env=runtime_env,
+        )
+        payload = _parse_payload(completed.stdout)
+        contexts = [str(item) for item in payload.get("graph_context", [])]
+        text = "\n".join(contexts).casefold()
+        term_matches = {
+            str(term): str(term).casefold() in text
+            for term in case.get("expected_terms", [])
+        }
+        passed = completed.returncode == 0 and all(term_matches.values())
+        return {
+            "id": case.get("id", query),
+            "query": query,
+            "passed": passed,
+            "latency_ms": (time.perf_counter() - started) * 1000.0,
+            "evidence_count": len(contexts),
+            "evidence_preview": [_preview(item) for item in contexts[:5]],
+            "term_matches": term_matches,
+            "slot_status": None,
+            "follow_up_required": None,
+            "citation_traceability": None,
+            "unsupported_metrics": ["required_slots", "citation_traceability", "duplicate_rate"],
+            "return_code": completed.returncode,
+            "stderr_tail": completed.stderr[-1000:],
+        }
+    except (OSError, subprocess.TimeoutExpired, ValueError) as exc:
+        return {
+            "id": case.get("id", query),
+            "query": query,
+            "passed": False,
+            "latency_ms": (time.perf_counter() - started) * 1000.0,
+            "error": str(exc),
+            "unsupported_metrics": ["required_slots", "citation_traceability", "duplicate_rate"],
+        }
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Capture a Cognee 2.0 baseline evaluation")
+    parser.add_argument("--gold-file", type=Path, required=True)
+    parser.add_argument("--workdir", type=Path, required=True, help="Cognee bridge directory")
+    parser.add_argument("--python", type=Path, required=True, help="Cognee Python environment")
+    parser.add_argument("--dataset", default="wiki_full")
+    parser.add_argument("--top", type=int, default=20)
+    parser.add_argument("--timeout", type=float, default=120.0)
+    parser.add_argument("--corpus-label", default="unspecified")
+    parser.add_argument("--corpus-file", type=Path, help="exact source file used to build the corpus")
+    parser.add_argument("--data-root", type=Path, help="isolated Cognee data root")
+    parser.add_argument("--system-root", type=Path, help="isolated Cognee system root")
+    parser.add_argument("--isolated-storage", action="store_true", help="assert both Cognee roots contain only this corpus")
+    parser.add_argument("--report", type=Path)
+    args = parser.parse_args()
+    if args.top < 1 or args.timeout <= 0:
+        parser.error("--top must be positive and --timeout must be greater than zero")
+    if bool(args.data_root) != bool(args.system_root):
+        parser.error("--data-root and --system-root must be provided together")
+    if args.corpus_file and not args.corpus_file.is_file():
+        parser.error("--corpus-file must point to an existing file")
+    if args.isolated_storage and not (args.data_root and args.system_root and args.corpus_file):
+        parser.error("--isolated-storage requires --data-root, --system-root, and --corpus-file")
+    cases = _load_cases(args.gold_file)
+    results = [_run_case(case, args) for case in cases]
+    latencies = [result["latency_ms"] for result in results]
+    report = {
+        "variant": "cognee-2.0-baseline",
+        "corpus_label": args.corpus_label,
+        "corpus_file": str(args.corpus_file) if args.corpus_file else None,
+        "corpus_fingerprint": _fingerprint(args.corpus_file),
+        "isolated_storage": args.isolated_storage,
+        "storage_roots": {
+            "data": str(args.data_root) if args.data_root else None,
+            "system": str(args.system_root) if args.system_root else None,
+        },
+        "dataset": args.dataset,
+        "gold_file": str(args.gold_file),
+        "case_count": len(results),
+        "passed_cases": sum(result["passed"] for result in results),
+        "pass_rate": sum(result["passed"] for result in results) / len(results),
+        "mean_latency_ms": statistics.mean(latencies),
+        "p95_latency_ms": _p95_latency(latencies),
+        "unsupported_metrics": ["required_slots", "citation_traceability", "duplicate_rate"],
+        "results": results,
+    }
+    encoded = json.dumps(report, ensure_ascii=False, indent=2)
+    print(encoded)
+    if args.report:
+        args.report.parent.mkdir(parents=True, exist_ok=True)
+        args.report.write_text(encoded + "\n", encoding="utf-8")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://neurograph.local/schemas/claim_version.schema.json",
+  "title": "ClaimVersion",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["claim_id", "claim_version_id", "version", "subject", "predicate", "object_value", "extraction_confidence", "source_quality", "support_strength"],
+  "properties": {
+    "claim_id": {"type": "string"},
+    "claim_version_id": {"type": "string"},
+    "version": {"type": "integer", "minimum": 1},
+    "subject": {"type": "string"},
+    "predicate": {"type": "string"},
+    "object_value": {},
+    "unit": {"type": ["string", "null"]},
+    "polarity": {"enum": ["positive", "negative"]},
+    "modality": {"enum": ["certain", "possible", "recommended", "hypothetical"]},
+    "population": {"type": ["string", "null"]},
+    "condition": {"type": ["string", "null"]},
+    "method": {"type": ["string", "null"]},
+    "valid_time": {"type": ["string", "null"]},
+    "observed_time": {"type": ["string", "null"], "format": "date-time"},
+    "source_scope": {"enum": ["author_result", "quoted_result", "background"]},
+    "status": {"enum": ["active", "disputed", "rejected", "superseded"]},
+    "extraction_confidence": {"type": "number", "minimum": 0, "maximum": 1},
+    "source_quality": {"type": "number", "minimum": 0, "maximum": 1},
+    "support_strength": {"type": "number", "minimum": 0, "maximum": 1}
+  }
+}

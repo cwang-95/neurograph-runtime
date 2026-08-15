@@ -1,0 +1,45 @@
+#!/usr/bin/env python3
+"""Persist one validated answer-layer feedback request."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(HERE))
+
+from neurograph3.answer_feedback import AnswerFeedbackRecorder, FeedbackRequest
+from neurograph3.fsrs import NodeZenBrainFSRS
+from neurograph3.store import Graph3Store
+from neurograph3.zenbrain import ZenBrainEventLedger
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Record validated Graph 3.0 answer feedback")
+    parser.add_argument("--storage-root", type=Path, default=HERE / "data" / "graph3")
+    parser.add_argument("--input", type=Path, help="JSON file; omit to read stdin")
+    parser.add_argument("--fsrs", action="store_true", help="also update the existing ZenBrain FSRS state")
+    args = parser.parse_args()
+
+    try:
+        if args.input:
+            payload = json.loads(args.input.read_text(encoding="utf-8"))
+        else:
+            payload = json.load(sys.stdin)
+        request = FeedbackRequest.model_validate(payload)
+        fsrs = NodeZenBrainFSRS() if args.fsrs else None
+        with Graph3Store(args.storage_root) as store:
+            ledger = ZenBrainEventLedger(store, fsrs=fsrs)
+            result = AnswerFeedbackRecorder(store, ledger).record(request)
+        print(result.model_dump_json(ensure_ascii=False))
+        return 0
+    except Exception as exc:
+        print(json.dumps({"error": str(exc)}, ensure_ascii=False), file=sys.stderr)
+        return 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

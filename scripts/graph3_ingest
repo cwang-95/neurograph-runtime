@@ -1,0 +1,55 @@
+#!/usr/bin/env python3
+"""Build a Graph 3.0 relation projection from one merged Markdown talk."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(HERE))
+
+from neurograph3.pipeline import build_deepseek_relation_client, ingest_and_build_graph
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("source", type=Path, help="merged talk Markdown file")
+    parser.add_argument("--storage-root", type=Path, default=HERE / "data" / "graph3")
+    parser.add_argument("--dataset", default=None)
+    parser.add_argument(
+        "--deepseek-relations",
+        action="store_true",
+        help="enable DeepSeek relation proposals; off by default",
+    )
+    parser.add_argument(
+        "--max-llm-calls",
+        type=int,
+        default=0,
+        help="maximum DeepSeek calls, 0 means unlimited when explicitly enabled",
+    )
+    parser.add_argument("--model", default="deepseek-v4-flash")
+    parser.add_argument("--timeout", type=float, default=90.0)
+    parser.add_argument("--no-cooccurrence", action="store_true")
+    args = parser.parse_args()
+
+    client = None
+    if args.deepseek_relations:
+        client = build_deepseek_relation_client(args.model, args.timeout)
+    _, stats = ingest_and_build_graph(
+        args.source,
+        storage_root=args.storage_root,
+        dataset=args.dataset,
+        relation_client=client,
+        use_deepseek=args.deepseek_relations,
+        max_llm_calls=args.max_llm_calls,
+        include_cooccurrence=not args.no_cooccurrence,
+    )
+    print(json.dumps(stats.__dict__, ensure_ascii=False, sort_keys=True))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

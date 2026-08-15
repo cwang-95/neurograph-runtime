@@ -1,0 +1,77 @@
+#!/usr/bin/env python3
+"""Retrieve Graph 3.0 evidence and assemble a safe answer draft."""
+
+from __future__ import annotations
+
+import argparse
+import sys
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(HERE))
+
+from neurograph3.answer import assemble_answer
+from neurograph3.embedding import OpenAICompatibleEmbedder
+from neurograph3.fsrs import NodeZenBrainFSRS
+from neurograph3.retrieval import Graph3Retriever
+from neurograph3.store import Graph3Store
+from neurograph3.vector_index import ANNIndex, ANNUnavailable
+from neurograph3.zenbrain import ZenBrainEventLedger
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Assemble a safe Graph 3.0 answer draft")
+    parser.add_argument("query")
+    parser.add_argument("--storage-root", type=Path, default=HERE / "data" / "graph3")
+    parser.add_argument("--top", type=int, default=8)
+    parser.add_argument("--max-items", type=int, default=8)
+    parser.add_argument("--max-chars-per-item", type=int, default=900)
+    parser.add_argument("--fsrs", action="store_true")
+    parser.add_argument("--embedding-endpoint")
+    parser.add_argument("--embedding-model", default="mlx-community/Qwen3-Embedding-0.6B-4bit-DWQ")
+    parser.add_argument("--embedding-timeout", type=float, default=30.0)
+    parser.add_argument("--ann-index", type=Path)
+    parser.add_argument("--ann-backend", choices=("auto", "hnswlib", "faiss"), default="auto")
+    args = parser.parse_args()
+    if args.top < 1 or args.max_items < 1 or args.max_chars_per_item < 80:
+        parser.error("top and max-items must be positive; max-chars-per-item must be at least 80")
+
+    fsrs = NodeZenBrainFSRS() if args.fsrs else None
+    try:
+        embedder = (
+            OpenAICompatibleEmbedder(
+                endpoint=args.embedding_endpoint,
+                model=args.embedding_model,
+                timeout=args.embedding_timeout,
+            )
+            if args.embedding_endpoint
+            else None
+        )
+        vector_index = (
+            ANNIndex(args.ann_index, backend=args.ann_backend)
+            if args.embedding_endpoint and args.ann_index
+            else None
+        )
+        with Graph3Store(args.storage_root) as store:
+            ledger = ZenBrainEventLedger(store, fsrs=fsrs)
+            pack = Graph3Retriever(
+                store,
+                embedder=embedder,
+                vector_index=vector_index,
+                zenbrain_prior=ledger,
+            ).retrieve(args.query, limit=args.top)
+            print(
+                assemble_answer(
+                    pack,
+                    max_items=args.max_items,
+                    max_chars_per_item=args.max_chars_per_item,
+                ).model_dump_json(ensure_ascii=False, indent=2)
+            )
+    except ANNUnavailable as exc:
+        print(f"graph3_answer: {exc}", file=sys.stderr)
+        return 2
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

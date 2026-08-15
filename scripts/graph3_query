@@ -1,0 +1,72 @@
+#!/usr/bin/env python3
+"""Query the Graph 3.0 evidence layer and emit an addressable EvidencePack."""
+
+from __future__ import annotations
+
+import argparse
+import sys
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(HERE))
+
+from neurograph3.fsrs import NodeZenBrainFSRS
+from neurograph3.embedding import OpenAICompatibleEmbedder
+from neurograph3.retrieval import Graph3Retriever
+from neurograph3.store import Graph3Store
+from neurograph3.vector_index import ANNIndex, ANNUnavailable
+from neurograph3.zenbrain import ZenBrainEventLedger
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Query Graph 3.0 evidence")
+    parser.add_argument("query")
+    parser.add_argument("--storage-root", type=Path, default=HERE / "data" / "graph3")
+    parser.add_argument("--top", type=int, default=8)
+    parser.add_argument("--fsrs", action="store_true", help="read existing ZenBrain FSRS priors")
+    parser.add_argument("--embedding-endpoint", help="enable semantic retrieval through an OpenAI-compatible endpoint")
+    parser.add_argument(
+        "--embedding-model",
+        default="mlx-community/Qwen3-Embedding-0.6B-4bit-DWQ",
+    )
+    parser.add_argument("--embedding-timeout", type=float, default=30.0)
+    parser.add_argument("--ann-index", type=Path, help="optional ANN index directory")
+    parser.add_argument("--ann-backend", choices=("auto", "hnswlib", "faiss"), default="auto")
+    args = parser.parse_args()
+
+    fsrs = NodeZenBrainFSRS() if args.fsrs else None
+    try:
+        embedder = (
+            OpenAICompatibleEmbedder(
+                endpoint=args.embedding_endpoint,
+                model=args.embedding_model,
+                timeout=args.embedding_timeout,
+            )
+            if args.embedding_endpoint
+            else None
+        )
+        vector_index = (
+            ANNIndex(
+                args.ann_index or args.storage_root / "vector_index",
+                backend=args.ann_backend,
+            )
+            if args.embedding_endpoint and args.ann_index
+            else None
+        )
+        with Graph3Store(args.storage_root) as store:
+            ledger = ZenBrainEventLedger(store, fsrs=fsrs)
+            pack = Graph3Retriever(
+                store,
+                embedder=embedder,
+                vector_index=vector_index,
+                zenbrain_prior=ledger,
+            ).retrieve(args.query, limit=args.top)
+            print(pack.model_dump_json(ensure_ascii=False))
+    except ANNUnavailable as exc:
+        print(f"graph3_query: {exc}", file=sys.stderr)
+        return 2
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

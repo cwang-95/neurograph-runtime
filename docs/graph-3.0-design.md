@@ -1,6 +1,19 @@
 # NeuroGraph 3.0 技术设计
 
-状态：设计基线 v0.2（已完成首轮技术 review，尚未实施）
+状态：设计基线 v0.5（已完成首轮技术 review；Phase 0–5 与证据覆盖基础已在 `feature/graph-3.0` 落地，已完成全量 AAPM 语义检索灰度验证，尚未切换 OpenClaw 默认入口）
+
+当前实现边界：已具备 RawAsset/SourceElement/Observation、Claim/EvidenceLink、保守实体图、显式模式语义关系、多证据关系聚合、DeepSeek 结构化关系候选及严格审核、可控批量构建入口、受 hop/beam/关系白名单约束的多跳图扩展、ZenBrain 追加事件账本与弱先验、多路 lexical/numeric/vector/graph 召回、可解释 RRF 路线融合、EvidencePack 槽位覆盖与确定性追问、现有 ZenBrain FSRS 调度器适配、Observation/ClaimVersion/Relation/Path 显式回答反馈接口、ClaimVersion 抑制与冲突投影、Codex/OpenClaw 通用反馈协议与 CLI。向量检索默认是可重建的 SQLite brute-force 基线，也已接入可选 HNSW/FAISS 派生索引及自动回退；DeepSeek 只生成候选，不直接改变权威事实；边/路径/Claim 目前使用事件弱先验，尚未有独立 FSRS 状态。
+
+### 2026-08-15 灰度前置实测
+
+- 使用现有 OpenClaw `merged_talks` 的 12 份 AAPM Markdown 做隔离构建：1,900 个 Observation、159 条 Claim 候选、14 个实体、23 条关系；构建过程未调用 DeepSeek。
+- 当前开发副本默认 `data/graph3` 仍是单份材料的小库，且没有 Observation embedding，不能代表全量知识库；因此没有切换 OpenClaw 默认入口。
+- 真实查询结果：英文 `online adaptive radiotherapy workflow` 返回 6 条可引用直接证据；混合查询 `GeoDose 机制 结果 runtime` 同时返回机制与量化结果，包含 1.5 ms、70.1 ms、30.6 ms 和约 100 ms 的原始证据。
+- 纯中文 `自适应放疗的实时计划流程` 在没有 embedding 的隔离库中按设计追问，说明当前缺口是中文语义召回而不是回答层重复调用模型；加入英文核心实体后可命中同一批跨页证据。
+- 本次灰度已通过 Rapid-MLX 模型管理器按需加载 Qwen3-Embedding-0.6B；1,900 条 Observation 全部生成 1024 维向量，并成功构建 1,900 条 HNSW 索引。验证完成后已恢复 `qwen3-vl-8b-4bit`，没有改变 OpenClaw 当前视觉模型状态。
+- 纯中文 `自适应放疗的实时计划流程` 已从无向量时的 `follow_up` 变为 `answer`，返回直接证据与机制证据；Graph3 query trace 实际包含 lexical、numeric、entity、graph、vector、ZenBrain 路线，GeoDose 查询额外产生 5 条图路径。
+- 对宽泛中文问题增加了保守的双语向量种子扩展；`在线自适应放疗的工作流和时间成本` 已从缺少量化槽位的追问变为 `answer`，召回到“10–20 秒”的流程效率证据。扩展只影响向量查询文本，不改用户原问题、原始证据或事实判断。
+- OpenClaw adapter 已支持 Graph3 运行时选择：优先使用 Graph 3.0 `.venv` 以启用 HNSW，不存在时回退旧 cognee 环境；语义端点、模型、ANN 路径均由环境变量控制。默认入口仍保持 Cognee，下一步是基于更大领域语料做 A/B 与切换门槛评测。
 
 ## 1. 目标、原则与边界
 
@@ -48,6 +61,13 @@ ClaimVersion 同时组成可版本化的 TopicUnit / KnowledgeUnit
   → Codex / OpenClaw / 独立回答模型
 
 ZenBrain Event Ledger 横向记录检索、采用、引用、确认和纠错事件
+
+3.0 通过 `NodeZenBrainFSRS` 调用 OpenClaw 现有的
+`@zensation/algorithms`，将观察节点的 FSRS 状态保存到 SQLite。检索只读
+`retrievability`，不会产生强化；`selected`、`cited`、`followed_up` 和
+`user_confirmed` 必须由回答层显式回写，才会更新 FSRS。`corrected` 与
+`rejected` 只影响事件先验，不触发 recall。ClaimVersion、Relation 和 Path
+使用同一追加事件账本，但当前只参与弱先验，不与 Observation 共用 FSRS 状态。
 ```
 
 权威数据保存在结构化元数据与事件账本中。向量索引、BM25 索引、图投影、摘要和缓存都是可重建的派生视图。
@@ -382,6 +402,18 @@ EvidencePack 是 Codex、OpenClaw 或独立回答模型消费的稳定接口，�
 }
 ```
 
+当前 `EvidencePack` 将内容分为两层：`evidence` 是参与主排序和槽位覆盖的
+主证据，`context_evidence` 是由父子、同页或相邻页关系补出的上下文。上下文
+不会抢占主证据名额，但会带有 `context_relation`、`context_distance` 和
+`context_of_observation_ids`，并进入可定位 citations，便于回答层补全流程和
+前后条件。
+
+跨文档完全重复的 Observation 按稳定 `duplicate_group_id` 合并：最高相关性
+和来源质量的 Observation 作为主代表，其余来源写入
+`supporting_observation_ids`、`supporting_citations`，不会被静默丢弃。来源质量
+目前由 Observation 类型和 extractor confidence 计算为可解释的 0–1 分数，
+只作为轻量排序项，不能覆盖当前问题相关性或证据槽位覆盖。
+
 上下文组装规则：
 
 - 数字、单位、条件、限制和否定句尽量保留原文；
@@ -393,6 +425,21 @@ EvidencePack 是 Codex、OpenClaw 或独立回答模型消费的稳定接口，�
 - 回答模型不能引用未进入 EvidencePack 的来源。
 
 `evidence` 和 `graph-evidence` 模式返回 EvidencePack，不调用最终回答模型；`answer` 模式才执行一次回答生成。Codex/OpenClaw 已经承担回答时，不再调用内部 DeepSeek 生成第二份答案。
+
+当前回答组装层提供确定性的 `AnswerDraft`，只消费 EvidencePack，不新增事实：
+
+```bash
+# 项目依赖安装在 ~/.cognee-venv 时使用该环境执行
+~/.cognee-venv/bin/python scripts/graph3_answer "GeoDose 的机制和结果" \
+  --storage-root data/graph3 \
+  --top 20 --max-items 6 > answer-draft.json
+```
+
+`AnswerDraft.status` 为 `answer`、`follow_up` 或 `conflict`。正常回答按机制、量化
+结果等槽位分组，并为每段证据分配 citation ID 和原始定位；缺槽位时输出追问；未
+裁决冲突时不生成单一结论。该层不调用 DeepSeek，Codex/OpenClaw 可以直接消费
+`response_markdown`，也可以把同一 JSON 交给最终回答模型润色，但模型只能引用其中
+的 `citations` 和 `sections`。
 
 ## 8. 歧义、冲突与纠错
 
@@ -414,6 +461,10 @@ EvidencePack 是 Codex、OpenClaw 或独立回答模型消费的稳定接口，�
 - 作者观点或来源之间存在真实争议；
 - 同一来源内部自相矛盾；
 - 重复表述但并不冲突。
+
+同一来源中明确列出的多个组件指标（例如各模块耗时和总耗时）先视为一个 breakdown，
+不能仅因数值不同就标成冲突；至少需要来自两个独立 Observation 的不同值，才进入
+未裁决冲突路径。
 
 明显解析错误由单位一致性、上下文、总量约束、原生 PPT 数据和更高等级来源自动裁决，不把所有错误候选展示给用户。只有来源等级接近、条件相同且无法可靠裁决时才请求确认。
 
@@ -454,9 +505,10 @@ rejected           被判无关或错误，不强化或降权
 
 ZenBrain 分别维护：
 
-- 节点状态：Claim、Entity、TopicUnit 的可检索性；
-- 边状态：关系在不同问题类型下的有效性；
-- 路径状态：被证据支持并实际帮助回答的路径；
+- 节点状态：当前实现先维护 Observation 的 FSRS 可检索性，后续扩展到 Claim、Entity、TopicUnit；
+- 事实状态：ClaimVersion 已有独立事件先验，纠错默认只作用于选中的版本，不自动修改同一逻辑 Claim 的其他版本；
+- 边状态：当前已记录 Relation 的显式回答反馈弱先验，后续扩展为按问题类型的独立调度状态；
+- 路径状态：当前已记录稳定 Path ID 的显式回答反馈弱先验，后续扩展为路径级巩固状态；
 - 用户上下文：用户近期关注方向，但不改变事实可信度；
 - 巩固候选：高频共同激活内容可形成候选 KnowledgeUnit，必须重新核验来源。
 
@@ -471,12 +523,74 @@ ZenBrain 分别维护：
 
 当前 2.0 的 `boost()` 在“被召回”时立即强化，且默认 graph-evidence 不经过 boost。3.0 不复用该行为，只将现有状态作为可选迁移数据，并默认从新的事件账本重新计分。
 
+回答层反馈接口必须显式调用：
+
+```python
+ledger.record_feedback(
+    observation_ids,
+    ZenBrainEventType.CITED,
+    query=query,
+    caller="answer-layer",
+)
+```
+
+事实级反馈使用 `record_claim_feedback(claim_version_ids, event_type)`。
+若回答层明确确认来源证据也应同步强化，才传入
+`propagate_to_observations=True`；纠错和拒绝不会沿证据链接扩散。
+
+`record_feedback` 不是检索函数的一部分。若只调用 `retrieve()`，事件数和
+FSRS 节点状态都不增加；这条约束纳入回归测试。
+
+EvidencePack 的 `conflicts` 只报告同一逻辑 Claim 下仍未裁决的不同版本；
+若某一 ClaimVersion 已被明确纠正、拒绝或静态标为 superseded/rejected，
+该版本不会进入回答证据，但原始 Observation 仍保留在权威存储中供审计。
+
+### 9.4 Codex/OpenClaw 回答层反馈协议
+
+回答模型完成回答后，只提交本次 EvidencePack 中实际使用的 ID，不提交自由文本事实：
+
+```python
+from neurograph3.answer_feedback import AnswerFeedbackRecorder, FeedbackRequest
+from neurograph3.zenbrain import ZenBrainEventType
+
+request = FeedbackRequest.from_pack(
+    pack,
+    ZenBrainEventType.CITED,
+    observation_ids=[item.observation_id for item in pack.evidence[:2]],
+    claim_version_ids=[claim_id for item in pack.evidence for claim_id in item.claim_version_ids],
+    relation_ids=[edge["relation_id"] for path in pack.graph_paths for edge in path["path_edges"]],
+    path_ids=[path["path_id"] for path in pack.graph_paths],
+    caller="openclaw",  # 或 codex
+    feedback_id="answer-turn-2026-08-14-001",
+)
+AnswerFeedbackRecorder(store, ledger).record(request)
+```
+
+协议会校验所有目标 ID 是否属于该 EvidencePack；越权 ID 直接拒绝。重复
+`feedback_id` 不新增事件，也不重复 FSRS 强化。无 Python 集成时可调用：
+
+```bash
+scripts/graph3_query "自适应放疗的实时计划流程" \
+  --storage-root data/graph3 > evidence-pack.json
+# 启用本地 embedding；若 ANN 索引不可用，retrieval_trace 会记录 SQLite 回退
+scripts/graph3_query "自适应放疗的实时计划流程" \
+  --storage-root data/graph3 \
+  --embedding-endpoint http://127.0.0.1:8000/v1/embeddings \
+  --ann-index data/graph3/vector_index > evidence-pack.json
+# 回答层从 evidence-pack.json 选择实际引用的 ID 后提交反馈
+printf '%s' '<反馈 JSON>' | scripts/graph3_feedback \
+  --storage-root data/graph3
+```
+
+当前只在 3.0 分支提供适配层，OpenClaw 稳定入口仍保持不变；切换默认入口
+前需要把 `graph-evidence` 的输出改为携带这些稳定 ID，并在回答完成后调用该 CLI/API。
+
 ## 10. 存储与工程实现
 
 首版建议：
 
 - SQLite：权威元数据、版本、EvidenceLink、事件账本和任务状态；
-- LanceDB：可重建的向量索引；
+- 可选 HNSW/FAISS：可重建的向量索引；SQLite 保留为无额外依赖的精确回退；
 - SQLite FTS5 或独立 BM25：关键词与精确文本检索；
 - NetworkX：早期图算法验证；数据量和并发达到瓶颈后再评估 Ladybug 或图数据库；
 - 原始文件目录：内容寻址、只读保存；
@@ -491,6 +605,150 @@ ZenBrain 分别维护：
 - 新 embedding、parser 或 schema 使用新版本并行构建，验证后切换；
 - 不把数据库放入 Python 包安装目录；
 - 运行配置、数据路径和模型版本必须由统一配置读取，文档不得与代码各写一份真相。
+
+当前重建入口：
+
+```bash
+# 单文件
+scripts/graph3_ingest talk.md --storage-root data/graph3 --dataset aapm_videos
+
+# 目录批量重建；默认同时抽取确定性 Claim/EvidenceLink，DeepSeek 关系候选仍需显式开启
+scripts/graph3_rebuild /path/to/markdown-dir \
+  --storage-root data/graph3 --dataset wiki_full \
+  --report data/graph3-rebuild-report.json
+```
+
+重建按内容地址和稳定 ID 幂等，可重复执行；报告区分 Observation、Claim、
+EvidenceLink、实体、确定性关系和 DeepSeek 调用预算。当前向量索引仍需单独
+执行可重建的 embedding/index 步骤。
+
+可选 ANN 索引入口：
+
+```bash
+# 从 SQLite 权威向量表重建 HNSW/FAISS 索引；默认位置为 storage-root/vector_index
+scripts/graph3_vector_index --storage-root data/graph3
+
+# 指定后端或索引目录
+scripts/graph3_vector_index --storage-root data/graph3 \
+  --index-root data/graph3/vector_index --backend hnswlib
+```
+
+ANN 后端是可选依赖，当前环境未安装时命令会明确返回不可用，在线检索仍回退
+到 SQLite 精确余弦搜索。`ANNIndex` 只保存向量和 Observation ID 映射，不替代
+SQLite；索引损坏、缺失、模型不一致或维度不一致时必须重新构建。安装
+`hnswlib` 或 `faiss-cpu` 后再执行重建，不应把不同 embedding 模型混入同一索引。
+项目提供 HNSW 可选依赖清单：
+
+```bash
+python -m pip install -r requirements-graph3-ann.txt
+```
+
+embedding 批处理与基准入口：
+
+```bash
+# 默认只补当前模型缺失的 Observation 向量
+scripts/graph3_embedding_index \
+  --storage-root data/graph3 \
+  --embedding-endpoint http://127.0.0.1:8000/v1/embeddings \
+  --report data/graph3-embedding-report.json
+
+# 明确切换 embedding 模型或修复向量空间时，显式全量重建
+scripts/graph3_embedding_index \
+  --storage-root data/graph3 \
+  --embedding-endpoint http://127.0.0.1:8000/v1/embeddings \
+  --embedding-model <model> --force
+
+# queries.txt 每行一个问题；输出 p50/p95、证据数、追问率和路线命中次数
+scripts/graph3_benchmark \
+  --storage-root data/graph3 --queries-file queries.txt --rounds 3 \
+  --report data/graph3-benchmark.json
+```
+
+批处理写入 SQLite 权威向量表，重复执行默认跳过已有同模型向量；切换模型
+必须使用 `--force`，避免在未版本化的单表向量空间中混用模型。基准只测检索
+层，不调用回答模型，便于比较 lexical/graph/vector/ANN 路线本身的延迟与覆盖。
+
+Gold-query 评测入口：
+
+```bash
+scripts/graph3_eval \
+  --storage-root data/graph3 \
+  --gold-file evaluation/aapm-smoke-gold.json \
+  --corpus-label aapm_smoke \
+  --corpus-file /path/to/best-in-physics-therapy-intelligent-in-treatment-planning-framework-for-real-time-adaptive-radiotherapy-art.md \
+  --isolated-storage \
+  --report data/graph3-evaluation.json
+```
+
+Gold case 可声明 `expected_terms`、`expected_observation_ids`、必需
+`required_slots` 和 `must_follow_up`。报告分别记录主证据命中、上下文命中、
+槽位状态、追问结果、引用可追溯率、重复率和延迟；它不调用最终回答模型，
+因此可以作为 Graph 3.0 与 2.0/其他检索器的共同评测协议。
+
+除基础 smoke 集外，`evaluation/aapm-expanded-gold.json` 覆盖 8 条自然问题：
+机制组件、模块运行时间、完整 runtime 分解、训练/验证/测试集规模、完整流程、
+指代不明、材料不支持的疾病外推，以及 GeoDose 的机制+输入输出+耗时组合问题。
+当前 Graph 3.0 在同一 AAPM 语料上的结果为 8/8，平均 3.60 ms、p95 7.05 ms、
+引用可追溯率 100%。其中“完整流程”不再因已明确给出框架名称而错误追问；“运行时间”
+会自动进入量化结果槽位；“这个方法的效果如何？”和材料未涉及的疾病问题仍会触发
+追问。这组用例用于约束意图识别、槽位规划与保守追问，不等价于最终回答质量。
+
+2.0 baseline 只读采集入口：
+
+```bash
+# 先在独立 Cognee 根目录中灌入并建图，避免 wiki_full 等已有语料污染基线
+DATA_ROOT_DIRECTORY=/tmp/cognee-aapm/data \
+SYSTEM_ROOT_DIRECTORY=/tmp/cognee-aapm/system \
+~/.cognee-venv/bin/python cognee-bridge/feed_wiki.py aapm_smoke \
+  --dir /path/to/aapm-input
+
+scripts/cognee_eval \
+  --gold-file evaluation/aapm-smoke-gold.json \
+  --workdir /Users/wangcheng/.openclaw/workspace/projects/neurograph/cognee-bridge \
+  --python /Users/wangcheng/.cognee-venv/bin/python \
+  --dataset aapm_smoke --corpus-label aapm_smoke \
+  --corpus-file /path/to/best-in-physics-therapy-intelligent-in-treatment-planning-framework-for-real-time-adaptive-radiotherapy-art.md \
+  --data-root /tmp/cognee-aapm/data --system-root /tmp/cognee-aapm/system \
+  --isolated-storage \
+  --report /tmp/cognee-baseline.json
+
+scripts/graph3_ab_compare \
+  --graph3-report /tmp/graph3-evaluation.json \
+  --baseline-report /tmp/cognee-baseline.json \
+  --corpus-match
+```
+
+只有两边 `corpus_label`、源文件 SHA-256 指纹相同，且两边都明确标记为独立存储，A/B
+结果才可解释。仅使用相同数据集名不够，因为 Cognee 的默认图数据库可能包含其他
+数据集。Cognee 2.0 当前 graph-evidence
+输出没有稳定 Observation/Citation ID，也没有 EvidenceSlot 状态，评测报告会把
+这些指标标为 unsupported，不会用文本猜测替代。语料标签不匹配时，比较器只展示
+两边原始指标，不输出性能差值；如需强制校验同语料，可追加 `--corpus-match`。
+
+2026-08-14 在同一篇 AAPM 材料上的独立实测（源文件 SHA-256：
+`273415fd6c8944c4dd5e28ba8bfb9b928af49fa110f0d6d50669c1477a15c1db`）：
+
+| 指标 | Graph 3.0 | Cognee 2.0 baseline |
+| --- | ---: | ---: |
+| Gold cases | 3/3 | 3/3 |
+| 平均检索延迟 | 4.75 ms | 5458.73 ms |
+| p95 检索延迟 | 8.29 ms | 5497.47 ms |
+| 槽位/引用/重复率 | 可评估 | `unsupported` |
+
+查询级证据也不同：
+
+- 标题查询命中 slide 1，并返回 `Observation ID` 与字符范围；标题 case 共记录
+  32 个可追溯引用。
+- `70.1 ms` 查询命中 slide 12，证据同时保留 `1.5 ms / 70.1 ms / 30.6 ms / ~100 ms`
+  的时间分解，`quantitative_result` 为 `supported`。
+- “GeoDose 的机制和结果”沿 lexical、numeric、entity、graph、`zenbrain_prior`
+  五条路线合并召回，命中 slides 5–8 的 DREME/GeoDose 流程证据与 slide 12 的
+  运行时结果，两个必需槽位均为 `supported`。
+- Cognee 2.0 三条查询虽然命中关键词，但每条只返回一段无稳定 Observation/Citation
+  定位的 `graph_context`；其报告因此不能证明槽位完整性或引用可追溯性。
+
+这组结果只说明当前固定 smoke corpus 上的检索与证据工程差异，不代表所有语料或所有
+问题的最终性能；后续应扩展跨讲座、跨领域和歧义问题集，并加入追问准确率与事实冲突率。
 
 ## 11. 实施与迁移策略
 
@@ -536,7 +794,16 @@ ZenBrain 分别维护：
 - 用户反馈与纠错传播；
 - 与禁用 ZenBrain 的基线进行消融测试。
 
-### Phase 5：迁移与切换
+### Phase 5：FSRS 与回答反馈
+
+- 接入现有 `@zensation/algorithms` FSRS，保存 Observation 节点状态；
+- 将可检索性作为弱先验，不改变事实相关性、证据质量和槽位覆盖判断；
+- 提供 `selected/cited/followed_up/user_confirmed/corrected/rejected` 的回答层显式事件接口，覆盖 Observation、Relation 和 Path；
+- 让 EvidencePack 返回关联 ClaimVersion，支持事实级确认、纠错和受控证据传播；
+- 验证检索不会隐式强化，反馈才会改变 FSRS 状态；
+- 后续再扩展边、路径和用户上下文的调度状态。
+
+### Phase 6：迁移与切换
 
 - 从 Cognee 2.0 导入候选实体、关系和文本引用；
 - 所有导入内容重新绑定 SourceElement 和 EvidenceLink；

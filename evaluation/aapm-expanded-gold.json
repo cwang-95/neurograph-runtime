@@ -1,0 +1,54 @@
+[
+  {
+    "id": "aapm-mechanism-components",
+    "query": "DREME 和 GeoDose 的机制",
+    "expected_terms": ["DREME", "GeoDose"],
+    "required_slots": ["mechanism"],
+    "must_follow_up": false
+  },
+  {
+    "id": "aapm-geodose-runtime",
+    "query": "GeoDose 70.1 ms",
+    "expected_terms": ["GeoDose", "70.1 ms"],
+    "required_slots": ["quantitative_result"],
+    "must_follow_up": false
+  },
+  {
+    "id": "aapm-runtime-breakdown",
+    "query": "DREME 1.5 ms GeoDose 70.1 ms TransFM 30.6 ms",
+    "expected_terms": ["DREME", "1.5 ms", "GeoDose", "70.1 ms", "TransFM", "30.6 ms"],
+    "required_slots": ["quantitative_result"],
+    "must_follow_up": false
+  },
+  {
+    "id": "aapm-dataset-split",
+    "query": "训练集 验证集 测试集 300 252 28 20",
+    "expected_terms": ["300", "252", "28", "20"],
+    "required_slots": ["quantitative_result"],
+    "must_follow_up": false
+  },
+  {
+    "id": "aapm-complete-pipeline",
+    "query": "AI-driven in-treatment adaptation framework 的完整流程",
+    "expected_terms": ["DREME", "GeoDose"],
+    "required_slots": ["mechanism"],
+    "must_follow_up": false
+  },
+  {
+    "id": "aapm-ambiguous-effect",
+    "query": "这个方法的效果如何？",
+    "must_follow_up": true
+  },
+  {
+    "id": "aapm-unsupported-disease",
+    "query": "这个方法在乳腺癌上的结果如何？",
+    "must_follow_up": true
+  },
+  {
+    "id": "aapm-geodose-full-result",
+    "query": "GeoDose 的机制、输入、输出和运行时间",
+    "expected_terms": ["GeoDose", "70.1 ms"],
+    "required_slots": ["mechanism", "quantitative_result"],
+    "must_follow_up": false
+  }
+]

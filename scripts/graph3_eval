@@ -1,0 +1,214 @@
+#!/usr/bin/env python3
+"""Evaluate Graph 3.0 retrieval against a small gold-query JSON file."""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import math
+import statistics
+import sys
+import time
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(HERE))
+
+from neurograph3.embedding import OpenAICompatibleEmbedder
+from neurograph3.retrieval import Graph3Retriever
+from neurograph3.store import Graph3Store
+from neurograph3.vector_index import ANNIndex, ANNUnavailable
+from neurograph3.zenbrain import ZenBrainEventLedger
+
+
+def _p95_latency(latencies: list[float]) -> float:
+    """Return the nearest-rank p95, including the max for small samples."""
+    ordered = sorted(latencies)
+    index = min(len(ordered) - 1, max(0, math.ceil(len(ordered) * 0.95) - 1))
+    return ordered[index]
+
+
+def _contains_terms(items: list[str], terms: list[str]) -> dict[str, bool]:
+    text = "\n".join(items).casefold()
+    return {term: term.casefold() in text for term in terms}
+
+
+def _preview(value: str, limit: int = 600) -> str:
+    compact = " ".join(str(value).split())
+    return compact if len(compact) <= limit else compact[: limit - 1] + "…"
+
+
+def _evidence_preview(items: list) -> list[dict]:
+    return [
+        {
+            "observation_id": item.observation_id,
+            "locator": item.locator,
+            "value": _preview(item.value),
+        }
+        for item in items[:5]
+    ]
+
+
+def _fingerprint(path: Path | None) -> str | None:
+    if path is None:
+        return None
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for block in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def _evaluate_case(case: dict, retriever: Graph3Retriever, top: int) -> dict:
+    query = str(case["query"])
+    started = time.perf_counter()
+    pack = retriever.retrieve(query, limit=top)
+    latency_ms = (time.perf_counter() - started) * 1000.0
+    primary_values = [item.value for item in pack.evidence]
+    context_values = [item.value for item in pack.context_evidence]
+    all_values = primary_values + context_values
+    expected_terms = [str(term) for term in case.get("expected_terms", [])]
+    term_primary = _contains_terms(primary_values, expected_terms)
+    term_all = _contains_terms(all_values, expected_terms)
+    expected_ids = set(case.get("expected_observation_ids", []))
+    primary_ids = {item.observation_id for item in pack.evidence}
+    context_ids = {item.observation_id for item in pack.context_evidence}
+    required_slots = [str(slot) for slot in case.get("required_slots", [])]
+    slot_results = {
+        slot: pack.slot_status.get(slot, "missing").value
+        if hasattr(pack.slot_status.get(slot, "missing"), "value")
+        else str(pack.slot_status.get(slot, "missing"))
+        for slot in required_slots
+    }
+    duplicate_groups = [
+        item.duplicate_group_id
+        for item in pack.evidence
+        if item.duplicate_group_id
+    ]
+    duplicate_rate = (
+        (len(duplicate_groups) - len(set(duplicate_groups))) / len(duplicate_groups)
+        if duplicate_groups
+        else 0.0
+    )
+    passed = True
+    if expected_terms and not all(term_primary.values()):
+        passed = False
+    if expected_ids and not expected_ids.issubset(primary_ids):
+        passed = False
+    if any(status != "supported" for status in slot_results.values()):
+        passed = False
+    if "must_follow_up" in case and bool(case["must_follow_up"]) != pack.follow_up_required:
+        passed = False
+    return {
+        "id": case.get("id", query),
+        "query": query,
+        "passed": passed,
+        "latency_ms": latency_ms,
+        "primary_evidence_count": len(pack.evidence),
+        "context_evidence_count": len(pack.context_evidence),
+        "primary_evidence_preview": _evidence_preview(pack.evidence),
+        "context_evidence_preview": _evidence_preview(pack.context_evidence),
+        "primary_term_matches": term_primary,
+        "pack_term_matches": term_all,
+        "expected_ids_in_primary": sorted(expected_ids & primary_ids),
+        "expected_ids_in_context": sorted(expected_ids & context_ids),
+        "slot_status": slot_results,
+        "follow_up_required": pack.follow_up_required,
+        "duplicate_rate": duplicate_rate,
+        "citation_count": len(pack.citations),
+        "all_citations_traceable": all(
+            citation.get("asset_id") and citation.get("locator")
+            for citation in pack.citations
+        ),
+        "retrieval_routes": pack.retrieval_trace.get("routes", []),
+        "top_observation_ids": [item.observation_id for item in pack.evidence],
+    }
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Evaluate Graph 3.0 against gold queries")
+    parser.add_argument("--storage-root", type=Path, required=True)
+    parser.add_argument("--gold-file", type=Path, required=True, help="JSON array or JSONL gold cases")
+    parser.add_argument("--top", type=int, default=20)
+    parser.add_argument("--embedding-endpoint")
+    parser.add_argument("--embedding-model", default="mlx-community/Qwen3-Embedding-0.6B-4bit-DWQ")
+    parser.add_argument("--embedding-timeout", type=float, default=30.0)
+    parser.add_argument("--ann-index", type=Path)
+    parser.add_argument("--ann-backend", choices=("auto", "hnswlib", "faiss"), default="auto")
+    parser.add_argument("--corpus-label", default="unspecified")
+    parser.add_argument("--corpus-file", type=Path, help="exact source file used to build the corpus")
+    parser.add_argument("--isolated-storage", action="store_true", help="assert storage contains only this corpus")
+    parser.add_argument("--report", type=Path)
+    args = parser.parse_args()
+    if args.top < 1:
+        parser.error("--top must be positive")
+    if args.ann_index and not args.embedding_endpoint:
+        parser.error("--ann-index requires --embedding-endpoint")
+    if args.corpus_file and not args.corpus_file.is_file():
+        parser.error("--corpus-file must point to an existing file")
+    if args.isolated_storage and not args.corpus_file:
+        parser.error("--isolated-storage requires --corpus-file")
+
+    raw = args.gold_file.read_text(encoding="utf-8").strip()
+    if not raw:
+        parser.error("--gold-file is empty")
+    if raw.startswith("["):
+        cases = json.loads(raw)
+    else:
+        cases = [json.loads(line) for line in raw.splitlines() if line.strip() and not line.lstrip().startswith("#")]
+    if not isinstance(cases, list) or not cases:
+        parser.error("--gold-file must contain a non-empty JSON array or JSONL")
+
+    try:
+        embedder = (
+            OpenAICompatibleEmbedder(
+                endpoint=args.embedding_endpoint,
+                model=args.embedding_model,
+                timeout=args.embedding_timeout,
+            )
+            if args.embedding_endpoint
+            else None
+        )
+        vector_index = ANNIndex(args.ann_index, backend=args.ann_backend) if args.ann_index else None
+        with Graph3Store(args.storage_root) as store:
+            retriever = Graph3Retriever(
+                store,
+                embedder=embedder,
+                vector_index=vector_index,
+                zenbrain_prior=ZenBrainEventLedger(store),
+            )
+            results = [_evaluate_case(case, retriever, args.top) for case in cases]
+    except (ANNUnavailable, OSError, ValueError, RuntimeError) as exc:
+        print(json.dumps({"error": str(exc)}, ensure_ascii=False))
+        return 2
+
+    latencies = [result["latency_ms"] for result in results]
+    report = {
+        "storage_root": str(args.storage_root),
+        "corpus_label": args.corpus_label,
+        "corpus_file": str(args.corpus_file) if args.corpus_file else None,
+        "corpus_fingerprint": _fingerprint(args.corpus_file),
+        "isolated_storage": args.isolated_storage,
+        "gold_file": str(args.gold_file),
+        "case_count": len(results),
+        "passed_cases": sum(result["passed"] for result in results),
+        "pass_rate": sum(result["passed"] for result in results) / len(results),
+        "mean_latency_ms": statistics.mean(latencies),
+        "p95_latency_ms": _p95_latency(latencies),
+        "mean_duplicate_rate": statistics.mean(result["duplicate_rate"] for result in results),
+        "citation_traceability_rate": sum(result["all_citations_traceable"] for result in results) / len(results),
+        "embedding_enabled": embedder is not None,
+        "ann_backend": vector_index.backend_name if vector_index else None,
+        "results": results,
+    }
+    encoded = json.dumps(report, ensure_ascii=False, indent=2)
+    print(encoded)
+    if args.report:
+        args.report.parent.mkdir(parents=True, exist_ok=True)
+        args.report.write_text(encoded + "\n", encoding="utf-8")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
